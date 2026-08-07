@@ -13,8 +13,8 @@ const OFFICE_LOCATION: {
   city: string;
 } = JSON.parse(
   process.env.NEXT_PUBLIC_LOCATION || `{
-    "latitude":5.179003,
-    "longitude":97.149272,
+    "latitude":3.3271875,
+    "longitude":99.167671875,
     "radius_m":200,
     "city":"tebing"
   }`
