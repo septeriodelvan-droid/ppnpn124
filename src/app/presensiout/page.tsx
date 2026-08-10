@@ -1,949 +1,691 @@
 'use client';
 
-import React, {
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
-
-import {
-  ArrowLeft,
-  Camera,
-  Clock,
-} from 'lucide-react';
-
+import { Clock, ArrowLeft, Camera } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import { toast } from 'react-hot-toast';
+import { toast, Toaster } from 'react-hot-toast';
 
 const OFFICE_LOCATION = {
-  latitude: 3.3271875,
-  longitude: 99.167671875,
-  radius_m: 200,
-  name: 'KPPN Tebing Tinggi',
-  address: 'Jl. Sutomo No. 2, Tebing Tinggi',
+    latitude: 3.3271875,
+    longitude: 99.167671875,
+    radius_m: 200,
+    name: 'KPPN Tebing Tinggi',
+    address: 'Jl. Sutomo No. 2, Tebing Tinggi',
 } as const;
 
 const WIB_TIME_ZONE = 'Asia/Jakarta';
 
 const getWIBDateString = (date = new Date()) => {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: WIB_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: WIB_TIME_ZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(date);
 
-  const year = parts.find((p) => p.type === 'year')?.value;
-  const month = parts.find((p) => p.type === 'month')?.value;
-  const day = parts.find((p) => p.type === 'day')?.value;
+    const year = parts.find((p) => p.type === 'year')?.value;
+    const month = parts.find((p) => p.type === 'month')?.value;
+    const day = parts.find((p) => p.type === 'day')?.value;
 
-  return `${year}-${month}-${day}`;
+    return `${year}-${month}-${day}`;
 };
 
 const addDaysToDateString = (dateString: string, days: number) => {
-  const date = new Date(`${dateString}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
+    const date = new Date(`${dateString}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
 };
 
 const makeWIBDateTime = (dateString: string, timeString: string) =>
-  new Date(`${dateString}T${timeString}+07:00`);
+    new Date(`${dateString}T${timeString}+07:00`);
 
-export default function CheckInPage() {
-  const router = useRouter();
+const VALID_LOGBOOK_STATUS = ['COMPLETED'];
 
-  // =========================
-  // HYDRATION FIX
-  // =========================
+export default function PresensiOutForm() {
+    const router = useRouter();
+    const [currentTime, setCurrentTime] = useState(new Date());
+    const [location, setLocation] = useState<{ lat: number; lon: number } | null>(null);
+    const [distance, setDistance] = useState<number | null>(null);
+    const [address, setAddress] = useState('Mencari alamat...');
+    const [locationStatus, setLocationStatus] = useState('Mencari lokasi...');
 
-  const [mounted, setMounted] =
-    useState(false);
+    // State Data Absen
+    const [attendanceId, setAttendanceId] = useState<number | null>(null);
+    const [logbookStatus, setLogbookStatus] = useState<string | null>(null);
+    const [currentShift, setCurrentShift] = useState<'pagi' | 'malam' | null>(null);
+    const [userId, setUserId] = useState<string | null>(null);
+    const [checkInTime, setCheckInTime] = useState<string | null>(null);
+    const [attendanceDate, setAttendanceDate] = useState<string | null>(null);
+    const [lateMinutes, setLateMinutes] = useState<number>(0);
 
-  // =========================
-  // STATE
-  // =========================
+    // State UI
+    const [canCheckOut, setCanCheckOut] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [loadingData, setLoadingData] = useState(true);
 
-  const [currentTime, setCurrentTime] =
-    useState(new Date());
+    // State Kamera
+    const [photo, setPhoto] = useState<string | null>(null);
+    const [cameraOpen, setCameraOpen] = useState(false);
+    const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
 
-  const [todayDateWib, setTodayDateWib] =
-    useState('');
+    const videoRef = React.useRef<HTMLVideoElement>(null);
+    const canvasRef = React.useRef<HTMLCanvasElement>(null);
+    // --- Realtime clock ---
+    useEffect(() => {
+        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+        return () => clearInterval(timer);
+    }, []);
 
-  const [location, setLocation] =
-    useState<{
-      lat: number;
-      lon: number;
-    } | null>(null);
-
-  const [distance, setDistance] =
-    useState<number | null>(null);
-
-  const [address, setAddress] =
-    useState('Mencari alamat...');
-
-  const [locationStatus, setLocationStatus] =
-    useState('Mencari lokasi...');
-
-  const [isSubmitting, setIsSubmitting] =
-    useState(false);
-
-  const [shift, setShift] = useState<
-    'pagi' | 'malam'
-  >('pagi');
-
-  const [userId, setUserId] = useState<
-    string | null
-  >(null);
-
-  const [canCheckIn, setCanCheckIn] =
-    useState(true);
-
-  // =========================
-  // FOTO / KAMERA
-  // =========================
-
-  const videoRef =
-    useRef<HTMLVideoElement | null>(null);
-
-  const canvasRef =
-    useRef<HTMLCanvasElement | null>(null);
-
-  const [photo, setPhoto] = useState<
-    string | null
-  >(null);
-
-  const [cameraOpen, setCameraOpen] =
-    useState(false);
-
-  // =========================
-  // MOUNTED FIX
-  // =========================
-
-  useEffect(() => {
-    setMounted(true);
-
-    setTodayDateWib(getWIBDateString());
-  }, []);
-
-  // =========================
-  // CLEANUP CAMERA
-  // =========================
-
-  useEffect(() => {
-    return () => {
-      if (videoRef.current?.srcObject) {
-        const stream =
-          videoRef.current
-            .srcObject as MediaStream;
-
-        stream
-          .getTracks()
-          .forEach((track) =>
-            track.stop()
-          );
-      }
-    };
-  }, []);
-
-  // =========================
-  // REALTIME CLOCK
-  // =========================
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, []);
-
-  // =========================
-  // RESET HARIAN BERDASARKAN WIB
-  // =========================
-
-  useEffect(() => {
-    if (!todayDateWib) return;
-
-    const timer = setInterval(() => {
-      const newDateWib = getWIBDateString();
-
-      if (newDateWib !== todayDateWib) {
-        setTodayDateWib(newDateWib);
-        setLocation(null);
-        setDistance(null);
-        setAddress('Mencari alamat...');
-        setLocationStatus('Mencari lokasi...');
-        setIsSubmitting(false);
-        setPhoto(null);
-      }
-    }, 60000);
-
-    return () => clearInterval(timer);
-  }, [todayDateWib]);
-
-  // =========================
-  // GPS
-  // =========================
-
-  const fetchLocation = async () => {
-    if (!navigator.geolocation) {
-      setLocationStatus(
-        'Geolocation tidak didukung browser ini.'
-      );
-
-      return;
-    }
-
-    setLocationStatus(
-      'Mengambil lokasi...'
-    );
-
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-
-        const lon = pos.coords.longitude;
-
-        setLocation({ lat, lon });
-
+    // --- Haversine distance ---
+    const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
         const R = 6371e3;
-
-        const φ1 =
-          (OFFICE_LOCATION.latitude *
-            Math.PI) /
-          180;
-
-        const φ2 = (lat * Math.PI) / 180;
-
-        const Δφ =
-          ((lat -
-            OFFICE_LOCATION.latitude) *
-            Math.PI) /
-          180;
-
-        const Δλ =
-          ((lon -
-            OFFICE_LOCATION.longitude) *
-            Math.PI) /
-          180;
-
-        const a =
-          Math.sin(Δφ / 2) ** 2 +
-          Math.cos(φ1) *
-            Math.cos(φ2) *
-            Math.sin(Δλ / 2) ** 2;
-
-        const c =
-          2 *
-          Math.atan2(
-            Math.sqrt(a),
-            Math.sqrt(1 - a)
-          );
-
-        const dist = R * c;
-
-        setDistance(dist);
-
-        try {
-          const res = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`
-          );
-
-          const data = await res.json();
-
-          setAddress(
-            data.display_name ||
-              'Alamat tidak ditemukan'
-          );
-        } catch {
-          setAddress(
-            'Gagal mendapatkan alamat'
-          );
-        }
-
-        if (
-          dist <= OFFICE_LOCATION.radius_m
-        ) {
-          setLocationStatus(
-            'Lokasi valid (dalam radius KPPN Tebing Tinggi)'
-          );
-        } else {
-          setLocationStatus(
-            'Di luar radius 200 meter KPPN Tebing Tinggi'
-          );
-        }
-      },
-      () => {
-        setLocationStatus(
-          'Gagal mendapatkan lokasi.'
-        );
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0,
-      }
-    );
-  };
-
-  useEffect(() => {
-    fetchLocation();
-  }, []);
-
-  // =========================
-  // USER LOGIN
-  // =========================
-
-  useEffect(() => {
-    const fetchUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (user) {
-        setUserId(user.id);
-      }
+        const φ1 = lat1 * Math.PI / 180;
+        const φ2 = lat2 * Math.PI / 180;
+        const Δφ = (lat2 - lat1) * Math.PI / 180;
+        const Δλ = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
     };
 
-    fetchUser();
-  }, []);
+    // --- Fetch location ---
+    const fetchLocation = () => {
+        if (!navigator.geolocation) return setLocationStatus('Geolocation tidak didukung browser ini.');
+        setLocationStatus('Mengambil lokasi...');
+        navigator.geolocation.getCurrentPosition(
+            async (pos) => {
+                const lat = pos.coords.latitude;
+                const lon = pos.coords.longitude;
+                setLocation({ lat, lon });
+                const dist = calculateDistance(lat, lon, OFFICE_LOCATION.latitude, OFFICE_LOCATION.longitude);
+                setDistance(dist);
 
-  // =========================
-  // CEK ABSEN
-  // =========================
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
+                    const data = await res.json();
+                    setAddress(data.display_name || 'Alamat tidak ditemukan');
+                } catch {
+                    setAddress('Gagal mendapatkan alamat');
+                }
 
-  useEffect(() => {
-    const checkAttendance = async () => {
-      if (!userId || !todayDateWib)
-        return;
-
-      const { data } = await supabase
-        .from('attendances')
-        .select('id')
-        .eq('user_id', userId)
-        .eq(
-          'attendance_date',
-          todayDateWib
-        )
-        .eq('shift', shift)
-        .maybeSingle();
-
-      setCanCheckIn(!data);
-    };
-
-    checkAttendance();
-  }, [todayDateWib, shift, userId]);
-
-  // =========================
-  // BUKA KAMERA
-  // =========================
-
-  const openCamera = async () => {
-    try {
-      const stream =
-        await navigator.mediaDevices.getUserMedia(
-          {
-            video: {
-              facingMode: 'user',
-              width: {
-                ideal: 1280,
-              },
-              height: {
-                ideal: 720,
-              },
+                setLocationStatus(
+                    dist <= OFFICE_LOCATION.radius_m
+                        ? '✅ Lokasi valid (dalam radius KPPN Tebing Tinggi)'
+                        : '🚫 Di luar radius 200 meter KPPN Tebing Tinggi'
+                );
             },
-            audio: false,
-          }
+            (error) => {
+                console.error(error);
+                setLocationStatus(
+                    error.code === error.PERMISSION_DENIED
+                        ? 'Akses lokasi ditolak.'
+                        : 'Gagal mendapatkan lokasi.'
+                );
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 15000,
+                maximumAge: 0,
+            }
         );
+    };
 
-      if (videoRef.current) {
-        videoRef.current.srcObject =
-          stream;
+    useEffect(() => { fetchLocation(); }, []);
 
-        await videoRef.current.play();
-      }
+    // --- Ambil user ID ---
+    useEffect(() => {
+        const fetchUser = async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+            setUserId(user.id);
+        };
+        fetchUser();
+    }, []);
 
-      setCameraOpen(true);
-    } catch (err) {
-      console.error(err);
+    useEffect(() => {
+        if (
+            cameraOpen &&
+            cameraStream &&
+            videoRef.current
+        ) {
+            videoRef.current.srcObject = cameraStream;
 
-      toast.error(
-        'Kamera tidak dapat diakses. Pastikan izin kamera diaktifkan.'
-      );
+            videoRef.current
+                .play()
+                .catch(err => console.error('Video play error:', err));
+        }
+    }, [cameraOpen, cameraStream]);
+
+    useEffect(() => {
+        return () => {
+            if (cameraStream) {
+                cameraStream
+                    .getTracks()
+                    .forEach(track => track.stop());
+            }
+        };
+    }, [cameraStream]);
+
+    // --- LOGIC UTAMA: FETCH SHIFT AKTIF (DIPERBAIKI) ---
+    const fetchActiveShift = async () => {
+        if (!userId) return;
+        setLoadingData(true);
+        try {
+            // Kita hapus filter tanggal yang ketat.
+            // Kita cari saja data attendance milik user yang check_out nya masih NULL.
+            // Kita urutkan dari yang paling baru check_in nya.
+            const { data: activeSessions, error } = await supabase
+                .from('attendances')
+                .select('id, shift, check_in, attendance_date, late_minutes, status')
+                .eq('user_id', userId)
+                .is('check_out', null) // KUNCINYA DISINI: Cari yg belum checkout
+                .order('check_in', { ascending: false }) // Ambil yang paling terakhir masuk
+                .limit(1);
+
+            if (error) throw error;
+
+            if (!activeSessions || activeSessions.length === 0) {
+                // Benar-benar tidak ada data absen aktif
+                setAttendanceId(null);
+                setCurrentShift(null);
+                setLogbookStatus(null);
+                setAttendanceDate(null);
+                setCheckInTime(null);
+                setLateMinutes(0);
+                setCanCheckOut(false);
+                return;
+            }
+
+            // DATA DITEMUKAN (Entah itu shift pagi atau malam, hari ini atau kemarin)
+            const activeShift = activeSessions[0];
+            setAttendanceId(activeShift.id);
+            setCurrentShift(activeShift.shift as 'pagi' | 'malam');
+            setCheckInTime(activeShift.check_in);
+            setAttendanceDate(activeShift.attendance_date);
+            setLateMinutes(Number(activeShift.late_minutes || 0));
+            // Cek Logbook berdasarkan ID absen tersebut
+            const { data: logbook } = await supabase
+                .from('logbooks')
+                .select('status')
+                .eq('attendance_id', activeShift.id)
+                .maybeSingle();
+
+            const status = logbook?.status || 'IN_PROGRESS';
+            setLogbookStatus(status);
+
+            // Validasi checkout
+            setCanCheckOut(VALID_LOGBOOK_STATUS.includes(status.toUpperCase()));
+
+        } catch (err) {
+            console.error('DEBUG fetchActiveShift error:', err);
+            setCanCheckOut(false);
+        } finally {
+            setLoadingData(false);
+        }
+    };
+
+    // Re-fetch setiap kali user id berubah
+    useEffect(() => { fetchActiveShift(); }, [userId]);
+
+    const openCamera = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: 'user',
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            });
+
+            setCameraStream(stream);
+            setCameraOpen(true);
+
+        } catch (err) {
+            console.error(err);
+            toast.error('Tidak dapat mengakses kamera');
+        }
+    };
+
+    const capturePhoto = () => {
+    if (!videoRef.current || !canvasRef.current) {
+        toast.error('Kamera belum siap');
+        return;
     }
-  };
 
-  // =========================
-  // AMBIL FOTO
-  // =========================
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
 
-  const capturePhoto = () => {
-  const video = videoRef.current;
-  const canvas = canvasRef.current;
+    // ==========================
+    // KOMPRES RESOLUSI
+    // ==========================
+    const TARGET_WIDTH = 540;
+    const TARGET_HEIGHT = 720;
 
-  if (!video || !canvas) return;
+    canvas.width = TARGET_WIDTH;
+    canvas.height = TARGET_HEIGHT;
 
-  // 1. TINGKATKAN RESOLUSI
-  const TARGET_WIDTH = 540;
-  const TARGET_HEIGHT = 720;
+    const ctx = canvas.getContext('2d');
 
-  canvas.width = TARGET_WIDTH;
-  canvas.height = TARGET_HEIGHT;
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  // 2. DEFINISI VARIABEL (Agar tidak ReferenceError)
-  const now = new Date();
-  const dateText = now.toLocaleDateString('id-ID', {
-    timeZone: WIB_TIME_ZONE,
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
-  const timeText = now.toLocaleTimeString('id-ID', {
-    timeZone: WIB_TIME_ZONE,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-  const latText = location?.lat ? location.lat.toFixed(5) : '-';
-  const lonText = location?.lon ? location.lon.toFixed(5) : '-';
-  const distanceText = distance !== null ? `${distance.toFixed(1)} meter` : '-';
-  const shortAddress = address ? address.substring(0, 38) : 'Lokasi tidak tersedia';
-
-  // 3. Gambar video ke canvas
-  ctx.drawImage(video, 0, 0, TARGET_WIDTH, TARGET_HEIGHT);
-
-  // 4. Overlay Watermark
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect(0, TARGET_HEIGHT - 200, TARGET_WIDTH, 200);
-
-  ctx.fillStyle = '#ffffff';
-  ctx.shadowColor = 'black';
-  ctx.shadowBlur = 4;
-
-  // Render Teks
-  ctx.font = 'bold 30px Arial';
-  ctx.fillText('SMART PPNPN - KPPN TEBING TINGGI', 20, TARGET_HEIGHT - 160);
-
-  ctx.font = '24px Arial';
-  ctx.fillText(`${dateText} ${timeText} WIB`, 20, TARGET_HEIGHT - 120);
-  ctx.fillText(`${latText}, ${lonText}`, 20, TARGET_HEIGHT - 90);
-  ctx.fillText(`Jarak: ${distanceText}`, 20, TARGET_HEIGHT - 60);
-  ctx.fillText(shortAddress, 20, TARGET_HEIGHT - 30);
-
-  // 5. EKSPOR GAMBAR (Kualitas 0.8 sudah sangat jernih dan tidak pecah)
-  const compressedImage = canvas.toDataURL('image/jpeg', 0.7);
-
-  setPhoto(compressedImage);
-  setCameraOpen(false);
-
-  // Stop kamera
-  const stream = video.srcObject as MediaStream;
-  stream?.getTracks().forEach((track) => track.stop());
-};
-
-  // =========================
-  // HANDLE CHECK IN - KPPN TEBING TINGGI
-  // =========================
-
-  const handleCheckIn = async () => {
-    if (!location) {
-      return toast.error('Lokasi belum terdeteksi.');
+    if (!ctx) {
+        toast.error('Canvas error');
+        return;
     }
 
-    if (!photo) {
-      return toast.error('Silakan ambil foto terlebih dahulu.');
-    }
+    // ==========================
+    // GAMBAR VIDEO
+    // ==========================
+    ctx.drawImage(
+        video,
+        0,
+        0,
+        TARGET_WIDTH,
+        TARGET_HEIGHT
+    );
 
-    // Validasi lokasi hanya berdasarkan jarak GPS <= 200 meter.
-    // Tidak lagi mensyaratkan hasil alamat mengandung kata "tebing".
-    const isValidLocation =
-      distance !== null &&
-      distance <= OFFICE_LOCATION.radius_m;
-
-    if (!isValidLocation) {
-      return toast.error(
-        `Presensi ditolak. Anda harus berada maksimal ${OFFICE_LOCATION.radius_m} meter dari KPPN Tebing Tinggi.`
-      );
-    }
-
-    if (!userId) {
-      return toast.error('Anda belum login.');
-    }
+    // ==========================
+    // DATA WATERMARK
+    // ==========================
 
     const now = new Date();
-    const attendanceDate = getWIBDateString(now);
 
-    // Piket pagi : masuk paling lambat 07.15 WIB hari ini.
-    // Piket malam: masuk paling lambat 17.30 WIB hari ini.
-    const checkInDeadline =
-      shift === 'pagi'
-        ? makeWIBDateTime(attendanceDate, '07:15:00')
-        : makeWIBDateTime(attendanceDate, '17:30:00');
+    const dateText = now.toLocaleDateString('id-ID', {
+        timeZone: WIB_TIME_ZONE,
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+    });
 
-    // Lewat batas waktu = presensi ditolak.
-    if (now.getTime() > checkInDeadline.getTime()) {
-      const batas =
-        shift === 'pagi'
-          ? '07.15 WIB'
-          : '17.30 WIB';
+    const timeText = now.toLocaleTimeString('id-ID', {
+        timeZone: WIB_TIME_ZONE,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    });
 
-      return toast.error(
-        `Presensi ditolak. Batas absen masuk piket ${shift} adalah ${batas}.`
-      );
+    const latText =
+        location?.lat?.toFixed(5) || '-';
+
+    const lonText =
+        location?.lon?.toFixed(5) || '-';
+
+    const distanceText =
+        distance !== null
+            ? `${distance.toFixed(1)} meter`
+            : '-';
+
+    const shortAddress =
+        address && address.length > 38
+            ? address.substring(0, 38) + '...'
+            : address;
+
+    // ==========================
+    // WATERMARK BOX
+    // ==========================
+
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(
+        0,
+        TARGET_HEIGHT - 200,
+        TARGET_WIDTH,
+        200
+    );
+
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = 'black';
+    ctx.shadowBlur = 4;
+
+    ctx.font = 'bold 24px Arial';
+    ctx.fillText(
+        'SMART PPNPN - KPPN TEBING TINGGI',
+        20,
+        TARGET_HEIGHT - 160
+    );
+
+    ctx.font = '24px Arial';
+
+    ctx.fillText(
+        `${dateText} ${timeText} WIB`,
+        20,
+        TARGET_HEIGHT - 120
+    );
+
+    ctx.fillText(
+        `${latText}, ${lonText}`,
+        20,
+        TARGET_HEIGHT - 90
+    );
+
+    ctx.fillText(
+        `Jarak: ${distanceText}`,
+        20,
+        TARGET_HEIGHT - 60
+    );
+
+    ctx.fillText(
+        shortAddress || '-',
+        20,
+        TARGET_HEIGHT - 30
+    );
+
+    // ==========================
+    // KOMPRES JPEG
+    // ==========================
+
+    const compressedImage =
+        canvas.toDataURL(
+            'image/jpeg',
+            0.7
+        );
+
+    setPhoto(compressedImage);
+
+    // stop kamera
+    if (cameraStream) {
+        cameraStream
+            .getTracks()
+            .forEach(track => track.stop());
     }
 
-    setIsSubmitting(true);
+    setCameraStream(null);
+    setCameraOpen(false);
+};
 
-    try {
-      // Cegah presensi ganda untuk tanggal WIB dan shift yang sama.
-      const { data: existingAttendance, error: existingError } =
-        await supabase
-          .from('attendances')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('attendance_date', attendanceDate)
-          .eq('shift', shift)
-          .maybeSingle();
 
-      if (existingError) throw existingError;
+    const uploadPhoto = async () => {
+        if (!photo || !userId) return null;
+        const response = await fetch(photo);
+        const blob = await response.blob();
+        const fileName = `${userId}_ot_${Date.now()}.jpg`;
+        const { error } = await supabase.storage
+            .from('attendance-photos')
+            .upload(fileName, blob, {
+                contentType: 'image/jpeg'
+            });
 
-      if (existingAttendance) {
-        setCanCheckIn(false);
-        throw new Error(`Anda sudah absen masuk untuk piket ${shift}.`);
-      }
+        if (error) throw error;
 
-      // =========================
-      // UPLOAD FOTO
-      // =========================
+        const { data } = supabase.storage
+            .from('attendance-photos')
+            .getPublicUrl(fileName);
+        return data.publicUrl;
+    };
 
-      const response = await fetch(photo);
-      const blob = await response.blob();
+    // --- Handle CheckOut KPPN Tebing Tinggi ---
+    const handleCheckOut = async () => {
+        if (!currentShift) return toast.error('Shift error.');
+        if (!attendanceId) return toast.error('Tidak ada sesi absen yang aktif.');
+        if (!attendanceDate) return toast.error('Tanggal presensi tidak ditemukan.');
+        if (!location) return toast.error('Lokasi belum terdeteksi.');
 
-      const fileName =
-        `${userId}_in_${Date.now()}.jpg`;
+        // Logbook tetap wajib diselesaikan.
+        if (
+            !logbookStatus ||
+            !VALID_LOGBOOK_STATUS.includes(logbookStatus.toUpperCase())
+        ) {
+            toast.error('Anda harus mengisi dan Submit Logbook terlebih dahulu!');
+            return;
+        }
 
-      const { error: uploadError } =
-        await supabase.storage
-          .from('attendance-photos')
-          .upload(fileName, blob, {
-            contentType: 'image/jpeg',
-          });
+        // Validasi lokasi murni berdasarkan jarak GPS <= 200 meter.
+        // Tidak ada syarat nama alamat mengandung kata "tebing".
+        const isValidLocation =
+            distance !== null &&
+            distance <= OFFICE_LOCATION.radius_m;
 
-      if (uploadError) {
-        throw uploadError;
-      }
+        if (!isValidLocation) {
+            toast.error(
+                `Presensi ditolak. Anda harus berada maksimal ${OFFICE_LOCATION.radius_m} meter dari KPPN Tebing Tinggi.`
+            );
+            return;
+        }
 
-      const { data: publicUrlData } =
-        supabase.storage
-          .from('attendance-photos')
-          .getPublicUrl(fileName);
+        if (!photo) {
+            toast.error('Silakan ambil foto selfie terlebih dahulu.');
+            return;
+        }
 
-      const photoUrl =
-        publicUrlData.publicUrl;
+        const now = new Date();
 
-      // Piket pagi selesai 17.30 WIB hari yang sama.
-      // Piket malam selesai 07.15 WIB hari berikutnya.
-      const shiftEnd =
-        shift === 'pagi'
-          ? makeWIBDateTime(
-              attendanceDate,
-              '17:30:00'
+        // Jam standar pulang hanya dipakai sebagai dasar perhitungan.
+        // Checkout boleh dilakukan kapan saja.
+        const scheduledEnd =
+            currentShift === 'pagi'
+                ? makeWIBDateTime(attendanceDate, '17:30:00')
+                : makeWIBDateTime(
+                    addDaysToDateString(attendanceDate, 1),
+                    '07:15:00'
+                );
+
+        // Jika pulang sebelum jam standar, selisih dihitung sebagai potongan.
+        // Jika pulang setelah jam standar, earlyLeaveMinutes = 0.
+        const earlyLeaveMinutes = Math.max(
+            0,
+            Math.ceil(
+                (scheduledEnd.getTime() - now.getTime()) / 60000
             )
-          : makeWIBDateTime(
-              addDaysToDateString(
-                attendanceDate,
-                1
-              ),
-              '07:15:00'
+        );
+
+        // Total potongan waktu = terlambat masuk + pulang cepat.
+        const deductionMinutes =
+            lateMinutes + earlyLeaveMinutes;
+
+        setIsSubmitting(true);
+
+        try {
+            const photoUrl = await uploadPhoto();
+
+            if (!photoUrl) {
+                throw new Error('Foto presensi gagal diunggah.');
+            }
+
+            const { error } = await supabase
+                .from('attendances')
+                .update({
+                    check_out: now.toISOString(),
+                    check_out_location: address,
+                    check_out_latitude: location.lat,
+                    check_out_longitude: location.lon,
+                    check_out_distance_m: distance,
+                    check_out_photo: photoUrl,
+                    early_leave_minutes: earlyLeaveMinutes,
+                    deduction_minutes: deductionMinutes,
+                })
+                .eq('id', attendanceId);
+
+            if (error) throw error;
+
+            toast.success(
+                earlyLeaveMinutes > 0
+                    ? `Absen pulang berhasil. Pulang ${earlyLeaveMinutes} menit lebih awal. Total potongan waktu ${deductionMinutes} menit.`
+                    : `Absen pulang berhasil. Total potongan waktu ${deductionMinutes} menit.`
             );
 
-      // =========================
-      // INSERT ATTENDANCE
-      // =========================
-
-      const {
-        data: attendanceData,
-        error: attendanceError,
-      } = await supabase
-        .from('attendances')
-        .insert([
-          {
-            user_id: userId,
-            attendance_date:
-              attendanceDate,
-            shift,
-
-            // Menyimpan batas check-in shift sebagai shift_start.
-            shift_start:
-              checkInDeadline.toISOString(),
-
-            shift_end:
-              shiftEnd.toISOString(),
-
-            check_in:
-              now.toISOString(),
-
-            // Karena keterlambatan ditolak, presensi yang berhasil = Hadir.
-            status: 'Hadir',
-
-            check_in_location:
-              address,
-
-            check_in_latitude:
-              location.lat,
-
-            check_in_longitude:
-              location.lon,
-
-            check_in_distance_m:
-              distance,
-
-            check_in_photo:
-              photoUrl,
-          },
-        ])
-        .select('id')
-        .single();
-
-      if (attendanceError) {
-        throw attendanceError;
-      }
-
-      // =========================
-      // INSERT LOGBOOK
-      // =========================
-
-      const { error: logbookError } =
-        await supabase
-          .from('logbooks')
-          .insert([
-            {
-              user_id: userId,
-              attendance_id:
-                attendanceData.id,
-              shift,
-              log_date:
-                attendanceDate,
-              description: '',
-              status:
-                'IN_PROGRESS',
-            },
-          ]);
-
-      if (logbookError) {
-        console.error(
-          'Gagal membuat logbook:',
-          logbookError
-        );
-      }
-
-      toast.success(
-        `Absen masuk piket ${shift} berhasil.`
-      );
-
-      setCanCheckIn(false);
-      router.replace('/dashboard');
-    } catch (err: any) {
-      toast.error(
-        err?.message ||
-          'Gagal menyimpan absen.'
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // =========================
-  // FORMAT WAKTU WIB
-  // =========================
-
-  const formattedTime = mounted
-    ? currentTime.toLocaleTimeString(
-        'id-ID',
-        {
-          timeZone: WIB_TIME_ZONE,
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
+            router.replace('/dashboard');
+        } catch (err: any) {
+            console.error('DEBUG handleCheckOut error:', err);
+            toast.error(err?.message || 'Gagal absen pulang');
+        } finally {
+            setIsSubmitting(false);
         }
-      )
-    : '--:--:--';
+    };
 
-  const formattedDate = mounted
-    ? currentTime.toLocaleDateString(
-        'id-ID',
-        {
-          timeZone: WIB_TIME_ZONE,
-          weekday: 'long',
-          day: 'numeric',
-          month: 'long',
-          year: 'numeric',
-        }
-      )
-    : 'Memuat tanggal...';
+    const formattedTime = currentTime.toLocaleTimeString('id-ID', {
+        timeZone: WIB_TIME_ZONE,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+    });
 
-  // =========================
-  // SSR FIX
-  // =========================
+    const formattedDate = currentTime.toLocaleDateString('id-ID', {
+        timeZone: WIB_TIME_ZONE,
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+    });
+    const isOutOfRadius = distance !== null && distance > OFFICE_LOCATION.radius_m;
 
-  if (!mounted) {
-    return null;
-  }
+    return (
+        <div className="min-h-screen bg-gray-50 font-sans">
+            <Toaster position="top-center" reverseOrder={false} />
+            <header className="bg-blue-900 text-white p-4 shadow-lg flex items-center">
+                <button onClick={() => router.back()} className="p-1 mr-4 text-white hover:text-gray-300 transition">
+                    <ArrowLeft size={24} />
+                </button>
+                <div>
+                    <h1 className="text-xl font-bold">
+                        Absen Pulang {currentShift ? `Piket ${currentShift.toUpperCase()}` : ''}
+                    </h1>
+                    <p className="text-xs text-blue-100">KPPN Tebing Tinggi</p>
+                </div>
+            </header>
 
-  // =========================
-  // UI
-  // =========================
+            <main className="p-6">
+                <div className="bg-white p-8 rounded-xl shadow-lg mb-8 text-center">
+                    <Clock size={48} className="text-gray-700 mx-auto mb-4" />
+                    <p className="text-lg font-semibold text-gray-700">Waktu Saat Ini (WIB)</p>
+                    <h2 className="text-5xl font-extrabold text-gray-900 mb-1">{formattedTime}</h2>
+                    <p className="text-md text-gray-500">{formattedDate}</p>
+                </div>
 
-  return (
-    <div className="min-h-screen bg-gray-50 font-sans">
+                {/* STATUS CARD */}
+                <div className="bg-white p-4 rounded-xl shadow-md border mb-5">
+                    {loadingData ? (
+                        <p className="text-center text-gray-500">Mengecek data absen...</p>
+                    ) : !attendanceId ? (
+                        <div className="p-3 bg-red-50 text-red-700 rounded-lg text-center font-medium">
+                            ⚠️ Tidak ditemukan data absen yang belum pulang.
+                            <br /><span className="text-xs font-normal">(Pastikan Anda sudah Absen Masuk sebelumnya)</span>
+                        </div>
+                    ) : (
+                        <div className="space-y-2">
+                            {/* INFO SHIFT AKTIF */}
+                            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-center">
+                                <p className="text-blue-800 font-semibold">Sesi Aktif: PIKET {currentShift?.toUpperCase()}</p>
+                            </div>
 
-      {/* HEADER */}
-      <header className="bg-blue-900 text-white p-4 shadow-lg flex items-center">
-        <button
-          onClick={() =>
-            router.back()
-          }
-          className="p-1 mr-4 text-white hover:text-gray-300 transition"
-        >
-          <ArrowLeft size={24} />
-        </button>
+                            <div className={`p-3 rounded-lg flex justify-between items-center ${canCheckOut ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}`}>
+                                <span>Status Logbook:</span>
+                                <span className="font-bold">{logbookStatus === 'COMPLETED' ? 'SUDAH DIISI ✅' : 'BELUM DIISI ❌'}</span>
+                            </div>
 
-        <div>
-          <h1 className="text-xl font-bold">
-            Absen Masuk
-          </h1>
-          <p className="text-xs text-blue-100">
-            KPPN Tebing Tinggi
-          </p>
+                            <div>
+                                <p className="font-semibold text-gray-700 mb-1">
+                                    Lokasi Presensi — KPPN Tebing Tinggi
+                                </p>
+                                <p className="text-sm text-gray-600 mb-1">
+                                    Jl. Sutomo No. 2, Tebing Tinggi — radius maksimal 200 meter
+                                </p>
+                                <p className={`text-sm ${isOutOfRadius ? 'text-red-600' : 'text-green-600'}`}>{locationStatus}</p>
+                                {distance !== null && <p className="mt-1 text-sm text-gray-600">Jarak: <b>{distance.toFixed(1)} meter</b></p>}
+                                {address && address !== 'Mencari alamat...' && (
+                                    <p className="mt-1 text-sm text-gray-600">
+                                        Alamat: <b>{address}</b>
+                                    </p>
+                                )}
+                            </div>
+
+                            <button onClick={fetchLocation} className="mt-2 w-full bg-gray-200 hover:bg-gray-300 text-gray-800 text-sm font-semibold py-2 px-3 rounded-lg">
+                                Ambil Ulang Lokasi
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                {/* KAMERA */}
+                <div className="bg-white p-4 rounded-xl shadow-md border mb-5">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2">
+                        <Camera size={18} />
+                        Foto Selfie Absen Pulang
+                    </h3>
+
+                    {!cameraOpen && !photo && (
+                        <button
+                            onClick={openCamera}
+                            className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-semibold"
+                        >
+                            Ambil Foto Selfie
+                        </button>
+                    )}
+
+                    {cameraOpen && (
+                        <div className="space-y-3">
+                            <video
+                                ref={videoRef}
+                                autoPlay
+                                playsInline
+                                muted
+                                className="w-full rounded-lg border bg-black min-h-[300px]"
+                            />
+
+                            <button
+                                onClick={capturePhoto}
+                                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold"
+                            >
+                                Ambil Foto
+                            </button>
+                        </div>
+                    )}
+
+                    {photo && (
+                        <div className="space-y-3">
+                            <img
+                                src={photo}
+                                alt="Preview Selfie"
+                                className="w-full rounded-lg border"
+                            />
+
+                            <button
+                                onClick={async () => {
+                                    setPhoto(null);
+                                    await openCamera();
+                                }}
+                                className="w-full bg-yellow-500 hover:bg-yellow-600 text-white py-3 rounded-lg font-semibold"
+                            >
+                                Ulangi Foto
+                            </button>
+                        </div>
+                    )}
+
+                    <canvas
+                        ref={canvasRef}
+                        style={{ display: 'none' }}
+                    />
+                </div>
+
+                <div className="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-900">
+                    <b>Perhitungan potongan waktu:</b><br />
+                    Terlambat masuk yang sudah tercatat: <b>{lateMinutes} menit</b>.<br />
+                    Jika checkout sebelum jam standar pulang, selisih menit akan ditambahkan sebagai potongan.
+                </div>
+
+                <button
+                    onClick={handleCheckOut}
+                    // Validasi lengkap dilakukan saat tombol ditekan
+                    className={`w-full py-4 text-white font-extrabold rounded-xl transition duration-300 shadow-xl ${isSubmitting ? 'bg-gray-400' : 'bg-blue-900 hover:bg-blue-800'
+                        }`}
+                >
+                    {isSubmitting ? 'Memproses...' : 'SUBMIT ABSEN PULANG'}
+                </button>
+
+                <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 text-center">
+                    <p className="font-semibold">Syarat Absen Pulang:</p>
+                    <ul className="list-disc list-inside text-left ml-4 mt-1">
+                        <li>Sudah Absen Masuk (sistem mendeteksi sesi terakhir yang belum checkout).</li>
+                        <li>Logbook sudah disubmit (Status: COMPLETED).</li>
+                        <li>Foto selfie wajib diambil sebelum submit.</li>
+                        <li>Berada maksimal 200 meter dari KPPN Tebing Tinggi.</li>
+                        <li>Piket pagi: jam standar pulang 17.30 WIB pada hari yang sama.</li>
+                        <li>Piket malam: jam standar pulang 07.15 WIB pada hari berikutnya.</li>
+                        <li>Checkout dapat dilakukan kapan saja.</li>
+                        <li>Jika pulang sebelum jam standar, selisih menit dicatat sebagai potongan.</li>
+                        <li>Total potongan waktu = menit terlambat masuk + menit pulang cepat.</li>
+                    </ul>
+                </div>
+            </main>
         </div>
-      </header>
-
-      <main className="p-6">
-
-        {/* JAM */}
-        <div className="bg-white p-8 rounded-xl shadow-lg mb-8 text-center">
-          <Clock
-            size={48}
-            className="text-gray-700 mx-auto mb-4"
-          />
-
-          <p className="text-lg font-semibold text-gray-700">
-            Waktu Saat Ini (WIB)
-          </p>
-
-          <h2 className="text-5xl font-extrabold text-gray-900 mb-1">
-            {formattedTime}
-          </h2>
-
-          <p className="text-md text-gray-500">
-            {formattedDate}
-          </p>
-        </div>
-
-        {/* SHIFT */}
-        <div className="bg-white p-4 rounded-xl shadow-md border mb-4">
-          <label className="font-semibold text-gray-700">
-            Pilih Shift
-          </label>
-
-          <select
-            value={shift}
-            onChange={(e) =>
-              setShift(
-                e.target
-                  .value as
-                  | 'pagi'
-                  | 'malam'
-              )
-            }
-            className="mt-2 w-full border p-2 rounded-lg"
-          >
-            <option value="pagi">
-              Piket Pagi — masuk maks. 07.15 WIB
-            </option>
-
-            <option value="malam">
-              Piket Malam — masuk maks. 17.30 WIB
-            </option>
-          </select>
-        </div>
-
-        {/* LOKASI */}
-        <div className="bg-white p-4 rounded-xl shadow-md border mb-5">
-          <p className="font-semibold text-gray-700 mb-1">
-            Lokasi Presensi — KPPN Tebing Tinggi
-          </p>
-
-          <p className="text-sm text-gray-600 mb-2">
-            {OFFICE_LOCATION.address} — radius maksimal {OFFICE_LOCATION.radius_m} meter
-          </p>
-
-          <p
-            className={`text-sm ${
-              distance &&
-              distance <=
-                OFFICE_LOCATION.radius_m
-                ? 'text-green-600'
-                : 'text-red-600'
-            }`}
-          >
-            {locationStatus}
-          </p>
-
-          {distance !==
-            null && (
-            <p className="mt-1 text-sm text-gray-600">
-              Jarak dari kantor:{' '}
-              <b>
-                {distance.toFixed(
-                  1
-                )}{' '}
-                meter
-              </b>
-            </p>
-          )}
-
-          <p className="mt-2 text-sm text-gray-600">
-            <b>Alamat GPS:</b>
-            <br />
-            {address}
-          </p>
-
-          <button
-            onClick={
-              fetchLocation
-            }
-            className="mt-3 bg-blue-900 text-white text-sm py-2 px-3 rounded-lg"
-          >
-            Ambil Ulang
-            Lokasi
-          </button>
-        </div>
-
-        {/* FOTO */}
-        <div className="bg-white p-4 rounded-xl shadow-md border mb-5">
-
-          <div className="flex items-center gap-2 mb-3">
-            <Camera size={20} />
-
-            <p className="font-semibold text-gray-700">
-              Foto Presensi
-            </p>
-          </div>
-
-          {/* TOMBOL BUKA KAMERA */}
-          {!photo &&
-            !cameraOpen && (
-              <button
-                onClick={() => {
-                  setCameraOpen(
-                    true
-                  );
-
-                  setTimeout(
-                    () => {
-                      openCamera();
-                    },
-                    300
-                  );
-                }}
-                className="bg-green-600 text-white px-4 py-2 rounded-lg"
-              >
-                Buka Kamera
-              </button>
-            )}
-
-          {/* VIDEO */}
-          {cameraOpen && (
-            <div className="space-y-3">
-
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full rounded-lg border bg-black"
-              />
-
-              <button
-                onClick={
-                  capturePhoto
-                }
-                className="bg-blue-900 text-white px-4 py-2 rounded-lg"
-              >
-                Ambil Foto
-              </button>
-            </div>
-          )}
-
-          {/* PREVIEW FOTO */}
-          {photo && (
-            <div className="space-y-3">
-
-              <img
-                src={photo}
-                alt="Preview"
-                className="w-full rounded-lg border"
-              />
-
-              <button
-                onClick={() => {
-                  setPhoto(
-                    null
-                  );
-
-                  setCameraOpen(
-                    true
-                  );
-
-                  setTimeout(
-                    () => {
-                      openCamera();
-                    },
-                    300
-                  );
-                }}
-                className="bg-yellow-500 text-white px-4 py-2 rounded-lg"
-              >
-                Ambil Ulang
-              </button>
-            </div>
-          )}
-
-          <canvas
-            ref={canvasRef}
-            className="hidden"
-          />
-        </div>
-
-        {/* SUBMIT */}
-        <button
-          onClick={
-            handleCheckIn
-          }
-          disabled={
-            isSubmitting ||
-            !canCheckIn
-          }
-          className={`w-full py-4 text-white font-extrabold rounded-xl transition duration-300 shadow-xl ${
-            isSubmitting ||
-            !canCheckIn
-              ? 'bg-gray-400 cursor-not-allowed'
-              : 'bg-blue-900 hover:bg-blue-800'
-          }`}
-        >
-          {isSubmitting
-            ? 'Memproses...'
-            : !canCheckIn
-            ? `Sudah absen piket ${shift}`
-            : 'SUBMIT ABSEN MASUK'}
-        </button>
-      </main>
-    </div>
-  );
+    );
 }
