@@ -50,6 +50,39 @@ const addDaysToDateString = (dateString: string, days: number) => {
 const makeWIBDateTime = (dateString: string, timeString: string) =>
   new Date(`${dateString}T${timeString}+07:00`);
 
+
+const getWIBMinutesOfDay = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: WIB_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value || 0);
+
+  return hour * 60 + minute;
+};
+
+// Untuk piket malam yang absen setelah tengah malam s.d. sebelum 07.15 WIB,
+// attendance_date tetap dianggap tanggal piket malam sebelumnya.
+const getAttendanceDateForShift = (
+  shift: 'pagi' | 'malam',
+  date = new Date()
+) => {
+  const wibDate = getWIBDateString(date);
+
+  if (
+    shift === 'malam' &&
+    getWIBMinutesOfDay(date) < 7 * 60 + 15
+  ) {
+    return addDaysToDateString(wibDate, -1);
+  }
+
+  return wibDate;
+};
+
 export default function CheckInPage() {
   const router = useRouter();
 
@@ -318,13 +351,16 @@ export default function CheckInPage() {
       if (!userId || !todayDateWib)
         return;
 
+      const effectiveAttendanceDate =
+        getAttendanceDateForShift(shift, new Date());
+
       const { data } = await supabase
         .from('attendances')
         .select('id')
         .eq('user_id', userId)
         .eq(
           'attendance_date',
-          todayDateWib
+          effectiveAttendanceDate
         )
         .eq('shift', shift)
         .maybeSingle();
@@ -475,26 +511,25 @@ export default function CheckInPage() {
     }
 
     const now = new Date();
-    const attendanceDate = getWIBDateString(now);
+    const attendanceDate =
+      getAttendanceDateForShift(shift, now);
 
-    // Piket pagi : masuk paling lambat 07.15 WIB hari ini.
-    // Piket malam: masuk paling lambat 17.30 WIB hari ini.
-    const checkInDeadline =
+    // Jam standar tetap dipakai sebagai dasar hitung keterlambatan,
+    // tetapi presensi TIDAK lagi ditolak jika lewat jam tersebut.
+    const scheduledStart =
       shift === 'pagi'
         ? makeWIBDateTime(attendanceDate, '07:15:00')
         : makeWIBDateTime(attendanceDate, '17:30:00');
 
-    // Lewat batas waktu = presensi ditolak.
-    if (now.getTime() > checkInDeadline.getTime()) {
-      const batas =
-        shift === 'pagi'
-          ? '07.15 WIB'
-          : '17.30 WIB';
+    const lateMinutes = Math.max(
+      0,
+      Math.ceil(
+        (now.getTime() - scheduledStart.getTime()) / 60000
+      )
+    );
 
-      return toast.error(
-        `Presensi ditolak. Batas absen masuk piket ${shift} adalah ${batas}.`
-      );
-    }
+    const attendanceStatus =
+      lateMinutes > 0 ? 'Terlambat' : 'Hadir';
 
     setIsSubmitting(true);
 
@@ -577,9 +612,9 @@ export default function CheckInPage() {
               attendanceDate,
             shift,
 
-            // Menyimpan batas check-in shift sebagai shift_start.
+            // Jam standar masuk sebagai dasar perhitungan keterlambatan.
             shift_start:
-              checkInDeadline.toISOString(),
+              scheduledStart.toISOString(),
 
             shift_end:
               shiftEnd.toISOString(),
@@ -587,8 +622,19 @@ export default function CheckInPage() {
             check_in:
               now.toISOString(),
 
-            // Karena keterlambatan ditolak, presensi yang berhasil = Hadir.
-            status: 'Hadir',
+            status:
+              attendanceStatus,
+
+            // 1 menit terlambat = 1 menit potongan waktu.
+            // Nilai ini dapat dikonversi menjadi persen/rupiah pada tahap payroll.
+            late_minutes:
+              lateMinutes,
+
+            early_leave_minutes:
+              0,
+
+            deduction_minutes:
+              lateMinutes,
 
             check_in_location:
               address,
@@ -642,7 +688,9 @@ export default function CheckInPage() {
       }
 
       toast.success(
-        `Absen masuk piket ${shift} berhasil.`
+        lateMinutes > 0
+          ? `Absen masuk berhasil. Terlambat ${lateMinutes} menit; potongan tercatat ${lateMinutes} menit.`
+          : `Absen masuk piket ${shift} berhasil tepat waktu.`
       );
 
       setCanCheckIn(false);
@@ -764,11 +812,11 @@ export default function CheckInPage() {
             className="mt-2 w-full border p-2 rounded-lg"
           >
             <option value="pagi">
-              Piket Pagi — masuk maks. 07.15 WIB
+              Piket Pagi — standar masuk 07.15 WIB
             </option>
 
             <option value="malam">
-              Piket Malam — masuk maks. 17.30 WIB
+              Piket Malam — standar masuk 17.30 WIB
             </option>
           </select>
         </div>
@@ -919,6 +967,12 @@ export default function CheckInPage() {
             ref={canvasRef}
             className="hidden"
           />
+        </div>
+
+        <div className="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-900">
+          <b>Perhitungan keterlambatan:</b><br />
+          Piket pagi dihitung terlambat setelah 07.15 WIB. Piket malam dihitung terlambat setelah 17.30 WIB.
+          Presensi tetap dapat dilakukan kapan saja; jumlah menit terlambat disimpan sebagai dasar potongan.
         </div>
 
         {/* SUBMIT */}
