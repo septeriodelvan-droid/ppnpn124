@@ -6,19 +6,39 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { toast, Toaster } from 'react-hot-toast';
 
-const OFFICE_LOCATION: {
-  latitude: number;
-  longitude: number;
-  radius_m: number;
-  city: string;
-} = JSON.parse(
-  process.env.NEXT_PUBLIC_LOCATION || `{
-    "latitude":3.3271875,
-    "longitude":99.167671875,
-    "radius_m":200,
-    "city":"tebing"
-  }`
-);
+const OFFICE_LOCATION = {
+  latitude: 3.3271875,
+  longitude: 99.167671875,
+  radius_m: 200,
+  name: 'KPPN Tebing Tinggi',
+  address: 'Jl. Sutomo No. 2, Tebing Tinggi',
+} as const;
+
+const WIB_TIME_ZONE = 'Asia/Jakarta';
+
+const getWIBDateString = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: WIB_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day = parts.find((p) => p.type === 'day')?.value;
+
+  return `${year}-${month}-${day}`;
+};
+
+const addDaysToDateString = (dateString: string, days: number) => {
+  const date = new Date(`${dateString}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
+const makeWIBDateTime = (dateString: string, timeString: string) =>
+  new Date(`${dateString}T${timeString}+07:00`);
 
 const VALID_LOGBOOK_STATUS = ['COMPLETED'];
 
@@ -36,6 +56,7 @@ export default function CheckOutForm() {
   const [currentShift, setCurrentShift] = useState<'pagi' | 'malam' | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [checkInTime, setCheckInTime] = useState<string | null>(null);
+  const [attendanceDate, setAttendanceDate] = useState<string | null>(null);
 
   // State UI
   const [canCheckOut, setCanCheckOut] = useState(false);
@@ -80,11 +101,24 @@ export default function CheckOutForm() {
           setAddress('Gagal mendapatkan alamat');
         }
 
-        setLocationStatus(dist <= OFFICE_LOCATION.radius_m ? '✅ Lokasi valid (dalam radius kantor)' : '🚫 Di luar radius kantor');
+        setLocationStatus(
+          dist <= OFFICE_LOCATION.radius_m
+            ? '✅ Lokasi valid (dalam radius KPPN Tebing Tinggi)'
+            : '🚫 Di luar radius 200 meter KPPN Tebing Tinggi'
+        );
       },
       (error) => {
         console.error(error);
-        setLocationStatus(error.code === error.PERMISSION_DENIED ? 'Akses lokasi ditolak.' : 'Gagal mendapatkan lokasi.');
+        setLocationStatus(
+          error.code === error.PERMISSION_DENIED
+            ? 'Akses lokasi ditolak.'
+            : 'Gagal mendapatkan lokasi.'
+        );
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
       }
     );
   };
@@ -123,7 +157,9 @@ export default function CheckOutForm() {
         // Benar-benar tidak ada data absen aktif
         setAttendanceId(null); 
         setCurrentShift(null); 
-        setLogbookStatus(null); 
+        setLogbookStatus(null);
+        setAttendanceDate(null);
+        setCheckInTime(null);
         setCanCheckOut(false);
         return;
       }
@@ -133,6 +169,7 @@ export default function CheckOutForm() {
       setAttendanceId(activeShift.id);
       setCurrentShift(activeShift.shift as 'pagi' | 'malam');
       setCheckInTime(activeShift.check_in);
+      setAttendanceDate(activeShift.attendance_date);
       // Cek Logbook berdasarkan ID absen tersebut
       const { data: logbook } = await supabase
         .from('logbooks')
@@ -157,63 +194,103 @@ export default function CheckOutForm() {
   // Re-fetch setiap kali user id berubah
   useEffect(() => { fetchActiveShift(); }, [userId]);
 
-  // --- Handle CheckOut ---
+  // --- Handle CheckOut KPPN Tebing Tinggi ---
   const handleCheckOut = async () => {
     if (!currentShift) return toast.error('Shift error.');
     if (!attendanceId) return toast.error('Tidak ada sesi absen yang aktif.');
+    if (!attendanceDate) return toast.error('Tanggal presensi tidak ditemukan.');
     if (!location) return toast.error('Lokasi belum terdeteksi.');
-    
-    // Pengecekan 4 jam
-    const now = new Date();
-    const checkInDate = new Date(checkInTime!);
-    const workedHours = (now.getTime() - checkInDate.getTime()) / (1000 * 60 * 60);
 
-    if (workedHours < 4) {
-      const remainingMinutes = Math.ceil((4 - workedHours) * 60);
-      toast.error(`Belum bisa absen pulang! Anda baru bekerja ${workedHours.toFixed(1)} jam. Tunggu ${remainingMinutes} menit lagi.`);
-      return; // Berhenti di sini
-    }
-
-    // Pengecekan Logbook
-    if (!logbookStatus || !VALID_LOGBOOK_STATUS.includes(logbookStatus.toUpperCase())) {
+    // Logbook tetap wajib selesai sebelum checkout.
+    if (
+      !logbookStatus ||
+      !VALID_LOGBOOK_STATUS.includes(logbookStatus.toUpperCase())
+    ) {
       toast.error('Anda harus mengisi dan Submit Logbook terlebih dahulu!');
       return;
     }
-        
-    // Pengecekan Lokasi
-    if (distance !== null && distance > OFFICE_LOCATION.radius_m) {
-      toast.error('Anda berada di luar radius kantor.');
+
+    // Validasi lokasi hanya berdasarkan jarak GPS <= 200 meter.
+    // Tidak ada lagi syarat nama alamat mengandung kata tertentu.
+    const isValidLocation =
+      distance !== null && distance <= OFFICE_LOCATION.radius_m;
+
+    if (!isValidLocation) {
+      toast.error(
+        `Presensi ditolak. Anda harus berada maksimal ${OFFICE_LOCATION.radius_m} meter dari KPPN Tebing Tinggi.`
+      );
       return;
     }
 
-    // Jika semua lolos, lanjutkan ke proses update
+    const now = new Date();
+
+    // Aturan batas pulang:
+    // - Piket pagi  : maksimal 17.30 WIB pada attendance_date yang sama.
+    // - Piket malam : maksimal 07.15 WIB pada hari berikutnya.
+    const checkOutDeadline =
+      currentShift === 'pagi'
+        ? makeWIBDateTime(attendanceDate, '17:30:00')
+        : makeWIBDateTime(
+            addDaysToDateString(attendanceDate, 1),
+            '07:15:00'
+          );
+
+    // Lewat batas waktu = presensi pulang ditolak.
+    if (now.getTime() > checkOutDeadline.getTime()) {
+      const batas =
+        currentShift === 'pagi'
+          ? `${attendanceDate} pukul 17.30 WIB`
+          : `${addDaysToDateString(attendanceDate, 1)} pukul 07.15 WIB`;
+
+      toast.error(
+        `Presensi pulang ditolak. Batas checkout piket ${currentShift} adalah ${batas}.`
+      );
+      return;
+    }
+
     setIsSubmitting(true);
+
     try {
-      const noww = new Date();
       const { error } = await supabase
         .from('attendances')
         .update({
-          check_out: noww.toISOString(),
+          check_out: now.toISOString(),
           check_out_location: address,
           check_out_latitude: location.lat,
           check_out_longitude: location.lon,
           check_out_distance_m: distance,
-          status: 'Hadir' // Final status
+          status: 'Hadir',
         })
         .eq('id', attendanceId);
-      
+
       if (error) throw error;
 
-      toast.success(`✅ Absen Pulang Shift ${currentShift.toUpperCase()} berhasil!`);
+      toast.success(
+        `✅ Absen pulang piket ${currentShift.toUpperCase()} berhasil!`
+      );
       router.replace('/dashboard');
     } catch (err: any) {
       console.error('DEBUG handleCheckOut error:', err);
       toast.error(err?.message || 'Gagal absen pulang');
-    } finally { setIsSubmitting(false); }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const formattedTime = currentTime.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-  const formattedDate = currentTime.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const formattedTime = currentTime.toLocaleTimeString('id-ID', {
+    timeZone: WIB_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const formattedDate = currentTime.toLocaleDateString('id-ID', {
+    timeZone: WIB_TIME_ZONE,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
   const isOutOfRadius = distance !== null && distance > OFFICE_LOCATION.radius_m;
 
   return (
@@ -223,13 +300,13 @@ export default function CheckOutForm() {
         <button onClick={() => router.back()} className="p-1 mr-4 text-white hover:text-gray-300 transition">
           <ArrowLeft size={24} />
         </button>
-        <h1 className="text-xl font-bold">Absen Pulang {currentShift ? `Shift ${currentShift.toUpperCase()}` : ''}</h1>
+        <div><h1 className="text-xl font-bold">Absen Pulang {currentShift ? `Piket ${currentShift.toUpperCase()}` : ''}</h1><p className="text-xs text-blue-100">KPPN Tebing Tinggi</p></div>
       </header>
 
       <main className="p-6">
         <div className="bg-white p-8 rounded-xl shadow-lg mb-8 text-center">
           <Clock size={48} className="text-gray-700 mx-auto mb-4" />
-          <p className="text-lg font-semibold text-gray-700">Waktu Saat Ini</p>
+          <p className="text-lg font-semibold text-gray-700">Waktu Saat Ini (WIB)</p>
           <h2 className="text-5xl font-extrabold text-gray-900 mb-1">{formattedTime}</h2>
           <p className="text-md text-gray-500">{formattedDate}</p>
         </div>
@@ -247,7 +324,7 @@ export default function CheckOutForm() {
              <div className="space-y-2">
                 {/* INFO SHIFT AKTIF */}
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-center">
-                    <p className="text-blue-800 font-semibold">Sesi Aktif: SHIFT {currentShift?.toUpperCase()}</p>
+                    <p className="text-blue-800 font-semibold">Sesi Aktif: PIKET {currentShift?.toUpperCase()}</p>
                 </div>
 
                 <div className={`p-3 rounded-lg flex justify-between items-center ${canCheckOut ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}`}>
@@ -256,7 +333,7 @@ export default function CheckOutForm() {
                 </div>
                 
                 <div>
-                  <p className="font-semibold text-gray-700 mb-1">Status Lokasi:</p>
+                  <p className="font-semibold text-gray-700 mb-1">Status Lokasi — KPPN Tebing Tinggi, Jl. Sutomo No. 2:</p>
                   <p className={`text-sm ${isOutOfRadius ? 'text-red-600' : 'text-green-600'}`}>{locationStatus}</p>
                   {distance !== null && <p className="mt-1 text-sm text-gray-600">Jarak: <b>{distance.toFixed(1)} meter</b></p>}
                 </div>
@@ -280,11 +357,14 @@ export default function CheckOutForm() {
         </button>
 
         <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 text-center">
-          <p>Syarat Absen Pulang:</p>
+          <p className="font-semibold">Syarat Absen Pulang:</p>
           <ul className="list-disc list-inside text-left ml-4 mt-1">
-            <li>Sudah Absen Masuk (Sistem akan mendeteksi shift terakhir yang belum di-checkout).</li>
+            <li>Sudah Absen Masuk (sistem mendeteksi sesi terakhir yang belum checkout).</li>
             <li>Logbook sudah disubmit (Status: COMPLETED).</li>
-            <li>Berada dalam radius kantor.</li>
+            <li>Berada maksimal 200 meter dari KPPN Tebing Tinggi.</li>
+            <li>Piket pagi: checkout paling lambat 17.30 WIB pada hari yang sama.</li>
+            <li>Piket malam: checkout paling lambat 07.15 WIB pada hari berikutnya.</li>
+            <li>Jika melewati batas waktu, presensi pulang ditolak.</li>
           </ul>
         </div>
       </main>
