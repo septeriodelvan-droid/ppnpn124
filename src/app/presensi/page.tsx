@@ -132,6 +132,11 @@ export default function CheckInPage() {
   const [canCheckIn, setCanCheckIn] =
     useState(true);
 
+  const [submitNotification, setSubmitNotification] = useState<{
+    type: 'success' | 'error' | 'info';
+    message: string;
+  } | null>(null);
+
   // =========================
   // FOTO / KAMERA
   // =========================
@@ -487,11 +492,17 @@ export default function CheckInPage() {
 
   const handleCheckIn = async () => {
     if (!location) {
-      return toast.error('Lokasi belum terdeteksi.');
+      const message = 'Absen belum berhasil. Lokasi belum terdeteksi.';
+      setSubmitNotification({ type: 'error', message });
+      toast.error(message);
+      return;
     }
 
     if (!photo) {
-      return toast.error('Silakan ambil foto terlebih dahulu.');
+      const message = 'Absen belum berhasil. Silakan ambil foto terlebih dahulu.';
+      setSubmitNotification({ type: 'error', message });
+      toast.error(message);
+      return;
     }
 
     // Validasi lokasi hanya berdasarkan jarak GPS <= 200 meter.
@@ -501,13 +512,18 @@ export default function CheckInPage() {
       distance <= OFFICE_LOCATION.radius_m;
 
     if (!isValidLocation) {
-      return toast.error(
-        `Presensi ditolak. Anda harus berada maksimal ${OFFICE_LOCATION.radius_m} meter dari KPPN Tebing Tinggi.`
-      );
+      const message =
+        `Absen belum berhasil. Anda harus berada maksimal ${OFFICE_LOCATION.radius_m} meter dari KPPN Tebing Tinggi.`;
+      setSubmitNotification({ type: 'error', message });
+      toast.error(message);
+      return;
     }
 
     if (!userId) {
-      return toast.error('Anda belum login.');
+      const message = 'Absen belum berhasil. Anda belum login.';
+      setSubmitNotification({ type: 'error', message });
+      toast.error(message);
+      return;
     }
 
     const now = new Date();
@@ -531,6 +547,10 @@ export default function CheckInPage() {
     const attendanceStatus =
       lateMinutes > 0 ? 'Terlambat' : 'Hadir';
 
+    setSubmitNotification({
+      type: 'info',
+      message: 'Sedang memproses presensi masuk...',
+    });
     setIsSubmitting(true);
 
     try {
@@ -548,7 +568,9 @@ export default function CheckInPage() {
 
       if (existingAttendance) {
         setCanCheckIn(false);
-        throw new Error(`Anda sudah absen masuk untuk piket ${shift}.`);
+        throw new Error(
+          `Absen belum berhasil karena Anda sudah absen masuk untuk piket ${shift} pada tanggal ini.`
+        );
       }
 
       // =========================
@@ -687,19 +709,29 @@ export default function CheckInPage() {
         );
       }
 
-      toast.success(
+      const successMessage =
         lateMinutes > 0
-          ? `Absen masuk berhasil. Terlambat ${lateMinutes} menit; potongan tercatat ${lateMinutes} menit.`
-          : `Absen masuk piket ${shift} berhasil tepat waktu.`
-      );
+          ? `Absen masuk BERHASIL. Anda terlambat ${lateMinutes} menit dan potongan waktu tercatat ${lateMinutes} menit.`
+          : `Absen masuk BERHASIL. Piket ${shift} tercatat tepat waktu.`;
+
+      setSubmitNotification({
+        type: 'success',
+        message: successMessage,
+      });
+      toast.success(successMessage);
 
       setCanCheckIn(false);
       router.replace('/dashboard');
     } catch (err: any) {
-      toast.error(
+      const message =
         err?.message ||
-          'Gagal menyimpan absen.'
-      );
+        'Absen belum berhasil. Gagal menyimpan data presensi.';
+
+      setSubmitNotification({
+        type: 'error',
+        message,
+      });
+      toast.error(message);
     } finally {
       setIsSubmitting(false);
     }
@@ -801,14 +833,15 @@ export default function CheckInPage() {
 
           <select
             value={shift}
-            onChange={(e) =>
+            onChange={(e) => {
               setShift(
                 e.target
                   .value as
                   | 'pagi'
                   | 'malam'
-              )
-            }
+              );
+              setSubmitNotification(null);
+            }}
             className="mt-2 w-full border p-2 rounded-lg"
           >
             <option value="pagi">
@@ -975,26 +1008,47 @@ export default function CheckInPage() {
           Presensi tetap dapat dilakukan kapan saja; jumlah menit terlambat disimpan sebagai dasar potongan.
         </div>
 
+        {submitNotification && (
+          <div
+            className={`mb-5 p-4 rounded-xl border text-sm font-semibold ${
+              submitNotification.type === 'success'
+                ? 'bg-green-50 border-green-200 text-green-800'
+                : submitNotification.type === 'error'
+                ? 'bg-red-50 border-red-200 text-red-800'
+                : 'bg-blue-50 border-blue-200 text-blue-800'
+            }`}
+          >
+            {submitNotification.type === 'success' && '✅ '}
+            {submitNotification.type === 'error' && '❌ '}
+            {submitNotification.type === 'info' && 'ℹ️ '}
+            {submitNotification.message}
+          </div>
+        )}
+
+        {!canCheckIn && (
+          <div className="mb-5 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-800">
+            <b>Catatan:</b> Database sudah memiliki presensi untuk piket {shift} pada tanggal ini.
+            Tombol tetap dapat diklik agar pesan kesalahan terlihat, tetapi sistem tidak membuat presensi ganda.
+            Untuk pengujian ulang, hapus data presensi uji sebelumnya terlebih dahulu.
+          </div>
+        )}
+
         {/* SUBMIT */}
         <button
           onClick={
             handleCheckIn
           }
           disabled={
-            isSubmitting ||
-            !canCheckIn
+            isSubmitting
           }
           className={`w-full py-4 text-white font-extrabold rounded-xl transition duration-300 shadow-xl ${
-            isSubmitting ||
-            !canCheckIn
+            isSubmitting
               ? 'bg-gray-400 cursor-not-allowed'
               : 'bg-blue-900 hover:bg-blue-800'
           }`}
         >
           {isSubmitting
             ? 'Memproses...'
-            : !canCheckIn
-            ? `Sudah absen piket ${shift}`
             : 'SUBMIT ABSEN MASUK'}
         </button>
       </main>
