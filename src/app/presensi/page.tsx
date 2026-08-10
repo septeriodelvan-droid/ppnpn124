@@ -16,27 +16,39 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { toast } from 'react-hot-toast';
 
-const OFFICE_LOCATION: {
-  latitude: number;
-  longitude: number;
-  radius_m: number;
-  city: string;
-} = JSON.parse(
-  process.env.NEXT_PUBLIC_LOCATION || `{
-    "latitude":5.179003,
-    "longitude":97.149272,
-    "radius_m":200,
-    "city":"tebing"
-  }`
-);
+const OFFICE_LOCATION = {
+  latitude: 3.3271875,
+  longitude: 99.167671875,
+  radius_m: 200,
+  name: 'KPPN Tebing Tinggi',
+  address: 'Jl. Sutomo No. 2, Tebing Tinggi',
+} as const;
 
-const WIB_OFFSET = 7 * 60 * 60 * 1000;
+const WIB_TIME_ZONE = 'Asia/Jakarta';
 
-const getTodayWIB = () => {
-  return new Date(Date.now() + WIB_OFFSET)
-    .toISOString()
-    .split('T')[0];
+const getWIBDateString = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: WIB_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day = parts.find((p) => p.type === 'day')?.value;
+
+  return `${year}-${month}-${day}`;
 };
+
+const addDaysToDateString = (dateString: string, days: number) => {
+  const date = new Date(`${dateString}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
+const makeWIBDateTime = (dateString: string, timeString: string) =>
+  new Date(`${dateString}T${timeString}+07:00`);
 
 export default function CheckInPage() {
   const router = useRouter();
@@ -54,9 +66,6 @@ export default function CheckInPage() {
 
   const [currentTime, setCurrentTime] =
     useState(new Date());
-
-  const [todayDate, setTodayDate] =
-    useState('');
 
   const [todayDateWib, setTodayDateWib] =
     useState('');
@@ -114,11 +123,7 @@ export default function CheckInPage() {
   useEffect(() => {
     setMounted(true);
 
-    setTodayDate(
-      new Date().toISOString().split('T')[0]
-    );
-
-    setTodayDateWib(getTodayWIB());
+    setTodayDateWib(getWIBDateString());
   }, []);
 
   // =========================
@@ -154,42 +159,28 @@ export default function CheckInPage() {
   }, []);
 
   // =========================
-  // RESET HARIAN
+  // RESET HARIAN BERDASARKAN WIB
   // =========================
 
   useEffect(() => {
-    if (!todayDate) return;
+    if (!todayDateWib) return;
 
     const timer = setInterval(() => {
-      const now = new Date();
+      const newDateWib = getWIBDateString();
 
-      const todayStr = now
-        .toISOString()
-        .split('T')[0];
-
-      if (todayStr !== todayDate) {
-        setTodayDate(todayStr);
-
+      if (newDateWib !== todayDateWib) {
+        setTodayDateWib(newDateWib);
         setLocation(null);
-
         setDistance(null);
-
-        setAddress(
-          'Mencari alamat...'
-        );
-
-        setLocationStatus(
-          'Mencari lokasi...'
-        );
-
+        setAddress('Mencari alamat...');
+        setLocationStatus('Mencari lokasi...');
         setIsSubmitting(false);
-
         setPhoto(null);
       }
     }, 60000);
 
     return () => clearInterval(timer);
-  }, [todayDate]);
+  }, [todayDateWib]);
 
   // =========================
   // GPS
@@ -275,11 +266,11 @@ export default function CheckInPage() {
           dist <= OFFICE_LOCATION.radius_m
         ) {
           setLocationStatus(
-            'Lokasi valid (dalam radius kantor)'
+            'Lokasi valid (dalam radius KPPN Tebing Tinggi)'
           );
         } else {
           setLocationStatus(
-            'Di luar radius kantor'
+            'Di luar radius 200 meter KPPN Tebing Tinggi'
           );
         }
       },
@@ -287,6 +278,11 @@ export default function CheckInPage() {
         setLocationStatus(
           'Gagal mendapatkan lokasi.'
         );
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
       }
     );
   };
@@ -400,8 +396,18 @@ export default function CheckInPage() {
 
   // 2. DEFINISI VARIABEL (Agar tidak ReferenceError)
   const now = new Date();
-  const dateText = now.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
-  const timeText = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  const dateText = now.toLocaleDateString('id-ID', {
+    timeZone: WIB_TIME_ZONE,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+  const timeText = now.toLocaleTimeString('id-ID', {
+    timeZone: WIB_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
   const latText = location?.lat ? location.lat.toFixed(5) : '-';
   const lonText = location?.lon ? location.lon.toFixed(5) : '-';
   const distanceText = distance !== null ? `${distance.toFixed(1)} meter` : '-';
@@ -420,7 +426,7 @@ export default function CheckInPage() {
 
   // Render Teks
   ctx.font = 'bold 30px Arial';
-  ctx.fillText('SMART PPNPN', 20, TARGET_HEIGHT - 160);
+  ctx.fillText('SMART PPNPN - KPPN TEBING TINGGI', 20, TARGET_HEIGHT - 160);
 
   ctx.font = '24px Arial';
   ctx.fillText(`${dateText} ${timeText} WIB`, 20, TARGET_HEIGHT - 120);
@@ -440,154 +446,120 @@ export default function CheckInPage() {
 };
 
   // =========================
-  // HANDLE CHECK IN
+  // HANDLE CHECK IN - KPPN TEBING TINGGI
   // =========================
 
   const handleCheckIn = async () => {
     if (!location) {
-      return toast.error(
-        'Lokasi belum terdeteksi.'
-      );
+      return toast.error('Lokasi belum terdeteksi.');
     }
 
     if (!photo) {
-      return toast.error(
-        'Silakan ambil foto terlebih dahulu.'
-      );
+      return toast.error('Silakan ambil foto terlebih dahulu.');
     }
 
+    // Validasi lokasi hanya berdasarkan jarak GPS <= 200 meter.
+    // Tidak lagi mensyaratkan hasil alamat mengandung kata "tebing".
     const isValidLocation =
-      distance &&
-      distance <=
-        OFFICE_LOCATION.radius_m &&
-      address
-        .toLowerCase()
-        .includes('tebing');
+      distance !== null &&
+      distance <= OFFICE_LOCATION.radius_m;
 
     if (!isValidLocation) {
       return toast.error(
-        'Lokasi di luar area kantor.'
+        `Presensi ditolak. Anda harus berada maksimal ${OFFICE_LOCATION.radius_m} meter dari KPPN Tebing Tinggi.`
+      );
+    }
+
+    if (!userId) {
+      return toast.error('Anda belum login.');
+    }
+
+    const now = new Date();
+    const attendanceDate = getWIBDateString(now);
+
+    // Piket pagi : masuk paling lambat 07.15 WIB hari ini.
+    // Piket malam: masuk paling lambat 17.30 WIB hari ini.
+    const checkInDeadline =
+      shift === 'pagi'
+        ? makeWIBDateTime(attendanceDate, '07:15:00')
+        : makeWIBDateTime(attendanceDate, '17:30:00');
+
+    // Lewat batas waktu = presensi ditolak.
+    if (now.getTime() > checkInDeadline.getTime()) {
+      const batas =
+        shift === 'pagi'
+          ? '07.15 WIB'
+          : '17.30 WIB';
+
+      return toast.error(
+        `Presensi ditolak. Batas absen masuk piket ${shift} adalah ${batas}.`
       );
     }
 
     setIsSubmitting(true);
 
     try {
-      if (!userId) {
-        throw new Error(
-          'Anda belum login.'
-        );
+      // Cegah presensi ganda untuk tanggal WIB dan shift yang sama.
+      const { data: existingAttendance, error: existingError } =
+        await supabase
+          .from('attendances')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('attendance_date', attendanceDate)
+          .eq('shift', shift)
+          .maybeSingle();
+
+      if (existingError) throw existingError;
+
+      if (existingAttendance) {
+        setCanCheckIn(false);
+        throw new Error(`Anda sudah absen masuk untuk piket ${shift}.`);
       }
 
       // =========================
       // UPLOAD FOTO
       // =========================
 
-      const response =
-        await fetch(photo);
+      const response = await fetch(photo);
+      const blob = await response.blob();
 
-      const blob =
-        await response.blob();
-
-      const fileName = `${userId}_in_${Date.now()}.jpg`;
+      const fileName =
+        `${userId}_in_${Date.now()}.jpg`;
 
       const { error: uploadError } =
         await supabase.storage
-          .from(
-            'attendance-photos'
-          )
+          .from('attendance-photos')
           .upload(fileName, blob, {
-            contentType:
-              'image/jpeg',
+            contentType: 'image/jpeg',
           });
 
       if (uploadError) {
         throw uploadError;
       }
 
-      const {
-        data: publicUrlData,
-      } = supabase.storage
-        .from(
-          'attendance-photos'
-        )
-        .getPublicUrl(fileName);
+      const { data: publicUrlData } =
+        supabase.storage
+          .from('attendance-photos')
+          .getPublicUrl(fileName);
 
       const photoUrl =
         publicUrlData.publicUrl;
 
-      // =========================
-      // CEK PROFIL
-      // =========================
-
-      const {
-        data: profileCheck,
-      } = await supabase
-        .from('profiles')
-        .select('position')
-        .eq('id', userId)
-        .single();
-
-      const userPos =
-        profileCheck?.position?.toUpperCase() ||
-        '';
-
-      const now = new Date();
-
-      let lockTime = '08:00:00';
-
-     if (shift === 'pagi') {
-        if (userPos.includes('SATPAM')) {
-          lockTime = '06:00:00';   // diubah
-        } else if (userPos.includes('CS')) {
-          lockTime = '07:30:00';
-        } else {
-          lockTime = '08:00:00';
-        }
-      } else {
-        if (userPos.includes('SATPAM')) {
-          lockTime = '17:00:00';   // diubah
-        } else {
-          lockTime = '19:00:00';
-        }
-      }
-
-      const shiftStart =
-        new Date(
-          todayDateWib +
-            'T' +
-            lockTime
-        );
-
-      const statusAbsen =
-        now > shiftStart
-          ? 'Terlambat'
-          : 'Hadir';
-
-      const lateMinutes =
-        Math.max(
-          0,
-          Math.floor(
-            (now.getTime() -
-              shiftStart.getTime()) /
-              60000
-          )
-        );
-
-      if (
-        statusAbsen ===
-        'Terlambat'
-      ) {
-        const confirmLate =
-          window.confirm(
-            `Anda terlambat ${lateMinutes} menit. Tetap lanjutkan?`
-          );
-
-        if (!confirmLate) {
-          setIsSubmitting(false);
-          return;
-        }
-      }
+      // Piket pagi selesai 17.30 WIB hari yang sama.
+      // Piket malam selesai 07.15 WIB hari berikutnya.
+      const shiftEnd =
+        shift === 'pagi'
+          ? makeWIBDateTime(
+              attendanceDate,
+              '17:30:00'
+            )
+          : makeWIBDateTime(
+              addDaysToDateString(
+                attendanceDate,
+                1
+              ),
+              '07:15:00'
+            );
 
       // =========================
       // INSERT ATTENDANCE
@@ -601,35 +573,22 @@ export default function CheckInPage() {
         .insert([
           {
             user_id: userId,
-
             attendance_date:
-              todayDateWib,
-
+              attendanceDate,
             shift,
 
+            // Menyimpan batas check-in shift sebagai shift_start.
             shift_start:
-              shiftStart.toISOString(),
+              checkInDeadline.toISOString(),
 
             shift_end:
-              shift === 'pagi'
-                ? new Date(
-                    todayDateWib +
-                      'T17:30:00'
-                  ).toISOString()
-                : new Date(
-                    new Date(
-                      todayDateWib
-                    ).getTime() +
-                      86400000 +
-                      7 *
-                        3600000
-                  ).toISOString(),
+              shiftEnd.toISOString(),
 
             check_in:
               now.toISOString(),
 
-            status:
-              statusAbsen,
+            // Karena keterlambatan ditolak, presensi yang berhasil = Hadir.
+            status: 'Hadir',
 
             check_in_location:
               address,
@@ -658,36 +617,36 @@ export default function CheckInPage() {
       // INSERT LOGBOOK
       // =========================
 
-      await supabase
-        .from('logbooks')
-        .insert([
-          {
-            user_id: userId,
+      const { error: logbookError } =
+        await supabase
+          .from('logbooks')
+          .insert([
+            {
+              user_id: userId,
+              attendance_id:
+                attendanceData.id,
+              shift,
+              log_date:
+                attendanceDate,
+              description: '',
+              status:
+                'IN_PROGRESS',
+            },
+          ]);
 
-            attendance_id:
-              attendanceData.id,
-
-            shift,
-
-            log_date:
-              todayDateWib,
-
-            description: '',
-
-            status:
-              'IN_PROGRESS',
-          },
-        ]);
+      if (logbookError) {
+        console.error(
+          'Gagal membuat logbook:',
+          logbookError
+        );
+      }
 
       toast.success(
-        `Absen ${shift} berhasil (${statusAbsen})`
+        `Absen masuk piket ${shift} berhasil.`
       );
 
       setCanCheckIn(false);
-
-      router.replace(
-        '/dashboard'
-      );
+      router.replace('/dashboard');
     } catch (err: any) {
       toast.error(
         err?.message ||
@@ -699,16 +658,18 @@ export default function CheckInPage() {
   };
 
   // =========================
-  // FORMAT WAKTU
+  // FORMAT WAKTU WIB
   // =========================
 
   const formattedTime = mounted
     ? currentTime.toLocaleTimeString(
         'id-ID',
         {
+          timeZone: WIB_TIME_ZONE,
           hour: '2-digit',
           minute: '2-digit',
           second: '2-digit',
+          hour12: false,
         }
       )
     : '--:--:--';
@@ -717,6 +678,7 @@ export default function CheckInPage() {
     ? currentTime.toLocaleDateString(
         'id-ID',
         {
+          timeZone: WIB_TIME_ZONE,
           weekday: 'long',
           day: 'numeric',
           month: 'long',
@@ -751,9 +713,14 @@ export default function CheckInPage() {
           <ArrowLeft size={24} />
         </button>
 
-        <h1 className="text-xl font-bold">
-          Absen Masuk
-        </h1>
+        <div>
+          <h1 className="text-xl font-bold">
+            Absen Masuk
+          </h1>
+          <p className="text-xs text-blue-100">
+            KPPN Tebing Tinggi
+          </p>
+        </div>
       </header>
 
       <main className="p-6">
@@ -766,7 +733,7 @@ export default function CheckInPage() {
           />
 
           <p className="text-lg font-semibold text-gray-700">
-            Waktu Saat Ini
+            Waktu Saat Ini (WIB)
           </p>
 
           <h2 className="text-5xl font-extrabold text-gray-900 mb-1">
@@ -797,11 +764,11 @@ export default function CheckInPage() {
             className="mt-2 w-full border p-2 rounded-lg"
           >
             <option value="pagi">
-              Shift Pagi
+              Piket Pagi — masuk maks. 07.15 WIB
             </option>
 
             <option value="malam">
-              Shift Malam
+              Piket Malam — masuk maks. 17.30 WIB
             </option>
           </select>
         </div>
@@ -809,7 +776,11 @@ export default function CheckInPage() {
         {/* LOKASI */}
         <div className="bg-white p-4 rounded-xl shadow-md border mb-5">
           <p className="font-semibold text-gray-700 mb-1">
-            Status Lokasi
+            Lokasi Presensi — KPPN Tebing Tinggi
+          </p>
+
+          <p className="text-sm text-gray-600 mb-2">
+            {OFFICE_LOCATION.address} — radius maksimal {OFFICE_LOCATION.radius_m} meter
           </p>
 
           <p
@@ -838,7 +809,7 @@ export default function CheckInPage() {
           )}
 
           <p className="mt-2 text-sm text-gray-600">
-            <b>Alamat:</b>
+            <b>Alamat GPS:</b>
             <br />
             {address}
           </p>
@@ -969,7 +940,7 @@ export default function CheckInPage() {
           {isSubmitting
             ? 'Memproses...'
             : !canCheckIn
-            ? `Sudah absen shift ${shift}`
+            ? `Sudah absen piket ${shift}`
             : 'SUBMIT ABSEN MASUK'}
         </button>
       </main>
