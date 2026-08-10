@@ -1,338 +1,338 @@
 'use client';
 
-import { 
-  ArrowLeft, ArrowRight, FileText, User, 
-  BarChart2, Briefcase, LogOut, AlertTriangle, RefreshCw, 
-  BarChart3
-} from 'lucide-react';
+import { Clock, ArrowLeft } from 'lucide-react';
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabaseClient'; 
+import { supabase } from '@/lib/supabaseClient';
+import { toast } from 'react-hot-toast';
 
-export default function DashboardPage() {
-  const router = useRouter();
+const OFFICE_LOCATION = {
+  latitude: 3.3271875,
+  longitude: 99.167671875,
+  radius_m: 200,
+  name: 'KPPN Tebing Tinggi',
+  address: 'Jl. Sutomo No. 2, Tebing Tinggi',
+} as const;
 
-  const [absensiStatus, setAbsensiStatus] = useState<'Belum Absen' | 'Masuk' | 'Pulang' | 'Terlambat'>('Belum Absen');
-  const [currentShift, setCurrentShift] = useState<'pagi' | 'malam' | null>(null);
-  const [hasCompletedLogbook, setHasCompletedLogbook] = useState(false);
-  const [userData, setUserData] = useState({ fullName: "Loading...", email: "loading@kppn.go.id" });
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
-//untuk rapor kinerja
-  const [showRaporModal, setShowRaporModal] = useState(false);
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1;
-  const defaultSemester = currentMonth <= 6 ? 1 : 2;
-  const [tahun, setTahun] = useState(currentYear);
-  const [semester, setSemester] = useState(defaultSemester);
-  
-  // Tanggal hari ini hanya untuk referensi visual/history, bukan filter utama
-  const [todayDate, setTodayDate] = useState(new Date().toISOString().split('T')[0]);
-  const usePhotoAttendance = process.env.NEXT_PUBLIC_FOTO;
-  // --- Fetch status hari ini ---
-  const fetchStatus = async () => {
-    setIsLoading(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.replace('/login'); return; }
+const WIB_TIME_ZONE = 'Asia/Jakarta';
 
-      // 1. Profil user
-      const profileRes = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('id', user.id)
-        .single();
+const getWIBDateString = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: WIB_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
 
-      setUserData({ 
-        fullName: profileRes.data?.full_name || user.email?.split('@')[0] || 'Pengguna KPPN', 
-        email: user.email || 'N/A' 
-      });
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day = parts.find((p) => p.type === 'day')?.value;
 
-      // ------------------------------------------------------------------
-      // LOGIC BARU: PRIORITASKAN CARI YANG "BELUM PULANG"
-      // ------------------------------------------------------------------
-      
-      // A. Cari absen aktif (belum checkout) kapanpun tanggalnya
-      const { data: activeSession } = await supabase
-        .from('attendances')
-        .select('id, check_in, check_out, status, shift')
-        .eq('user_id', user.id)
-        .is('check_out', null) // Cari yang belum checkout
-        .order('check_in', { ascending: false }) // Ambil yang paling baru
-        .limit(1)
-        .maybeSingle();
-
-      if (activeSession) {
-        // --- JIKA ADA YANG BELUM PULANG (CONTOH: SHIFT MALAM KEMARIN) ---
-        setCurrentShift(activeSession.shift as 'pagi' | 'malam');
-        setAbsensiStatus(activeSession.status === 'Terlambat' ? 'Terlambat' : 'Masuk');
-        
-        // Cek logbook untuk sesi aktif ini
-        const { data: log } = await supabase
-            .from('logbooks')
-            .select('status')
-            .eq('attendance_id', activeSession.id)
-            .maybeSingle();
-            
-        setHasCompletedLogbook(log?.status === 'COMPLETED');
-      
-      } else {
-        // --- JIKA TIDAK ADA YANG AKTIF, BARU CEK HISTORY HARI INI ---
-        const { data: todaysHistory } = await supabase
-            .from('attendances')
-            .select('id, shift, check_out')
-            .eq('user_id', user.id)
-            .eq('attendance_date', todayDate); // Cek tanggal hari ini
-
-        // Cek apakah hari ini sudah ada yang selesai?
-        if (todaysHistory && todaysHistory.length > 0) {
-            // Misal pagi sudah selesai, sekarang malam?
-            // Logic sederhana: Jika ada record hari ini dan tidak aktif, berarti 'Pulang' / Selesai
-            setAbsensiStatus('Pulang');
-            setCurrentShift(null);
-            setHasCompletedLogbook(false);
-        } else {
-            // Benar-benar kosong hari ini
-            setAbsensiStatus('Belum Absen');
-            setCurrentShift(null);
-            setHasCompletedLogbook(false);
-        }
-      }
-
-    } catch (err) {
-      console.error(err);
-      setCurrentShift(null);
-      setAbsensiStatus('Belum Absen');
-      setHasCompletedLogbook(false);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // --- Reset otomatis tiap tanggal baru ---
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const todayStr = new Date().toISOString().split('T')[0];
-      if (todayStr !== todayDate) setTodayDate(todayStr);
-    }, 60_000);
-    return () => clearInterval(interval);
-  }, [todayDate]);
-
-  useEffect(() => {
-    fetchStatus();
-    const handleFocus = () => fetchStatus();
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [todayDate]);
-
-  // --- Tombol handler ---
-  const handleAbsenMasuk = () => {
-    // console.log('Absen Masuk clicked, usePhotoAttendance:', usePhotoAttendance);
-    router.push(
-    usePhotoAttendance==='true' ? '/presensi' : '/checkinpage'
-  );
+  return `${year}-${month}-${day}`;
 };
-  const handleAbsenPulang = () => { 
-    // Izinkan ke halaman checkout jika status Masuk/Terlambat
-    // Validasi logbook juga dilakukan di halaman checkout sebagai pengaman ganda
-    if (currentShift) router.push(
-        usePhotoAttendance==='true' ? '/presensiout' : '/checkoutform'
-    ); 
 
-  };
-  const handleLogout = async () => { 
-    setIsLoggingOut(true); 
-    await supabase.auth.signOut(); 
-    router.replace('/login'); 
-  };
+const addDaysToDateString = (dateString: string, days: number) => {
+  const date = new Date(`${dateString}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
 
-  const StatusBadge = ({ status }: { status: string }) => {
-    let bgColor = 'bg-red-600', text = 'Belum Absen', ringColor = 'ring-red-400';
-    if (status === 'Masuk') { bgColor = 'bg-green-600'; text = 'Sudah Absen Masuk'; ringColor = 'ring-green-400'; }
-    else if (status === 'Pulang') { bgColor = 'bg-blue-600'; text = 'Selesai Hari Ini'; ringColor = 'ring-blue-400'; }
-    else if (status === 'Terlambat') { bgColor = 'bg-yellow-600'; text = 'Absen Terlambat'; ringColor = 'ring-yellow-400'; }
+const makeWIBDateTime = (dateString: string, timeString: string) =>
+  new Date(`${dateString}T${timeString}+07:00`);
 
-    return <div className={`px-4 py-2 text-white rounded-full font-semibold text-sm shadow-md transition duration-300 ${bgColor} ring-2 ${ringColor} ring-opacity-50`}>{text}</div>;
-  };
-
-  // LOGIC TOMBOL
-  // Tombol Pulang aktif jika status Masuk/Terlambat DAN Logbook sudah COMPLETED
-  const isPulangDisabled = (absensiStatus !== 'Masuk' && absensiStatus !== 'Terlambat') || !hasCompletedLogbook;
+export default function CheckInPage() {
+  const router = useRouter();
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [location, setLocation] = useState<{ lat: number; lon: number } | null>(null);
+  const [distance, setDistance] = useState<number | null>(null);
+  const [address, setAddress] = useState<string>('Mencari alamat...');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<string>('Mencari lokasi...');
+  const [shift, setShift] = useState<'pagi' | 'malam'>('pagi');
+  const [todayDateWib, setTodayDateWib] = useState(getWIBDateString());
   
-  // Tombol Masuk aktif HANYA JIKA status 'Belum Absen' ATAU 'Pulang' (untuk memungkinkan double shift)
-  const isMasukDisabled = absensiStatus === 'Masuk' || absensiStatus === 'Terlambat';
+  const [userId, setUserId] = useState<string | null>(null);
+  const [canCheckIn, setCanCheckIn] = useState(true);
 
-  type FeatureCardProps = { icon: React.ComponentType<{ size?: number }>, title: string, description: string, href?: string, onClick?: () => void };
-  const FeatureCard = ({ icon: Icon, title, description, href, onClick }: FeatureCardProps) => {
-    const common = "flex items-center p-4 bg-white rounded-xl shadow-md hover:shadow-lg transition duration-300 border border-gray-100 transform hover:scale-[1.01]";
-    if (onClick) {
-      return (
-        <button onClick={onClick} className={common}>
-          <div className="p-3 bg-blue-100 text-blue-800 rounded-lg mr-4 shadow-inner"><Icon size={24} /></div>
-          <div><h3 className="font-bold text-lg text-gray-800">{title}</h3><p className="text-sm text-gray-500">{description}</p></div>
-        </button>
-      );
+  // --- Realtime clock ---
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // --- Reset otomatis ketika tanggal WIB berganti ---
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const todayStr = getWIBDateString();
+      if (todayStr !== todayDateWib) {
+        setTodayDateWib(todayStr);
+        setLocation(null);
+        setDistance(null);
+        setAddress('Mencari alamat...');
+        setLocationStatus('Mencari lokasi...');
+        setIsSubmitting(false);
+      }
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [todayDateWib]);
+
+  // --- Ambil lokasi GPS ---
+  const fetchLocation = async () => {
+    if (!navigator.geolocation) {
+      setLocationStatus('Geolocation tidak didukung browser ini.');
+      return;
     }
-    return (
-      <a href={href || '#'} className={common}>
-        <div className="p-3 bg-blue-100 text-blue-800 rounded-lg mr-4 shadow-inner"><Icon size={24} /></div>
-        <div><h3 className="font-bold text-lg text-gray-800">{title}</h3><p className="text-sm text-gray-500">{description}</p></div>
-      </a>
+
+    setLocationStatus('Mengambil lokasi...');
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        setLocation({ lat, lon });
+
+        const R = 6371e3;
+        const φ1 = OFFICE_LOCATION.latitude * Math.PI / 180;
+        const φ2 = lat * Math.PI / 180;
+        const Δφ = (lat - OFFICE_LOCATION.latitude) * Math.PI / 180;
+        const Δλ = (lon - OFFICE_LOCATION.longitude) * Math.PI / 180;
+        const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        const dist = R * c;
+        setDistance(dist);
+
+        try {
+          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
+          const data = await res.json();
+          setAddress(data.display_name || 'Alamat tidak ditemukan');
+        } catch {
+          setAddress('Gagal mendapatkan alamat');
+        }
+
+        if (dist <= OFFICE_LOCATION.radius_m)
+          setLocationStatus('Lokasi valid (dalam radius kantor)');
+        else setLocationStatus('Di luar radius kantor');
+      },
+      () => {
+        setLocationStatus('Gagal mendapatkan lokasi.');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      }
     );
   };
 
+  useEffect(() => { fetchLocation(); }, []);
 
-  const [open, setOpen] = useState(false);
-  const [year, setYear] = useState(new Date().getFullYear());
-  const [month, setMonth] = useState(new Date().getMonth() + 1);
+  // Waktu dan tanggal selalu ditampilkan dalam WIB/Asia Jakarta
+  const formattedTime = currentTime.toLocaleTimeString('id-ID', {
+    timeZone: WIB_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const formattedDate = currentTime.toLocaleDateString('id-ID', {
+    timeZone: WIB_TIME_ZONE,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
 
-  // const router = useRouter();
+  // --- Ambil user ID saat login ---
+  useEffect(() => {
+    const fetchUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) setUserId(user.id);
+    };
+    fetchUser();
+  }, []);
 
-const handleOpenModal = () => {
-  setOpen(true);
-};
+  // --- Cek apakah user sudah absen hari ini ---
+  useEffect(() => {
+    const checkAttendance = async () => {
+      if (!userId) return;
+      const { data } = await supabase
+        .from('attendances')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('attendance_date', todayDateWib)
+        .eq('shift', shift)
+        .maybeSingle();
+      setCanCheckIn(!data);
+    };
+    checkAttendance();
+  }, [todayDateWib, shift, userId]);
 
-const handleSubmit = async () => {
-  const { data: { user } } = await supabase.auth.getUser();
+  // --- HANDLE CHECK-IN KPPN TEBING TINGGI ---
+  const handleCheckIn = async () => {
+    if (!location) return toast.error('Lokasi belum terdeteksi.');
 
-  router.push(
-    `/rapor/${user?.id}?tahun=${tahun}&semester=${semester}`
-  );
-};
+    // Validasi lokasi hanya berdasarkan jarak GPS <= 200 meter.
+    // Tidak lagi mensyaratkan hasil alamat mengandung kata "tebing".
+    const isValidLocation =
+      distance !== null && distance <= OFFICE_LOCATION.radius_m;
 
-  if (isLoading || isLoggingOut) return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50">
-      <div className="flex flex-col items-center">
-        <RefreshCw className="h-8 w-8 animate-spin text-blue-700" />
-        <p className="mt-4 text-gray-600 font-semibold">{isLoggingOut ? "Sampai Jumpa..." : "Memuat Dashboard..."}</p>
-      </div>
-    </div>
-  );
+    if (!isValidLocation) {
+      return toast.error(
+        `Presensi ditolak. Anda harus berada maksimal ${OFFICE_LOCATION.radius_m} meter dari KPPN Tebing Tinggi.`
+      );
+    }
 
- 
+    if (!userId) return toast.error('Anda belum login.');
+
+    const now = new Date();
+    const attendanceDate = getWIBDateString(now);
+
+    // Piket pagi  : masuk paling lambat 07.15 WIB hari ini.
+    // Piket malam : masuk paling lambat 17.30 WIB hari ini.
+    const checkInDeadline =
+      shift === 'pagi'
+        ? makeWIBDateTime(attendanceDate, '07:15:00')
+        : makeWIBDateTime(attendanceDate, '17:30:00');
+
+    // Lewat batas waktu = ditolak, bukan lagi status "Terlambat".
+    if (now.getTime() > checkInDeadline.getTime()) {
+      const batas = shift === 'pagi' ? '07.15 WIB' : '17.30 WIB';
+      return toast.error(
+        `Presensi ditolak. Batas absen masuk piket ${shift} adalah ${batas}.`
+      );
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      // Cegah presensi ganda pada tanggal WIB dan shift yang sama.
+      const { data: existingAttendance, error: existingError } = await supabase
+        .from('attendances')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('attendance_date', attendanceDate)
+        .eq('shift', shift)
+        .maybeSingle();
+
+      if (existingError) throw existingError;
+
+      if (existingAttendance) {
+        setCanCheckIn(false);
+        throw new Error(`Anda sudah absen masuk untuk piket ${shift}.`);
+      }
+
+      // Piket pagi selesai 17.30 WIB hari yang sama.
+      // Piket malam selesai 07.15 WIB pada hari berikutnya.
+      const shiftEnd =
+        shift === 'pagi'
+          ? makeWIBDateTime(attendanceDate, '17:30:00')
+          : makeWIBDateTime(
+              addDaysToDateString(attendanceDate, 1),
+              '07:15:00'
+            );
+
+      const { data: attendanceData, error: attendanceError } = await supabase
+        .from('attendances')
+        .insert([{
+          user_id: userId,
+          attendance_date: attendanceDate,
+          shift,
+          shift_start: checkInDeadline.toISOString(),
+          shift_end: shiftEnd.toISOString(),
+          check_in: now.toISOString(),
+          status: 'Hadir',
+          check_in_location: address,
+          check_in_latitude: location.lat,
+          check_in_longitude: location.lon,
+          check_in_distance_m: distance,
+        }])
+        .select('id')
+        .single();
+
+      if (attendanceError) throw attendanceError;
+
+      // ================= RANDOM VERIFIKASI 5% PER MINGGU =================
+      const startYear = new Date(now.getFullYear(), 0, 1);
+      const days = Math.floor((now.getTime() - startYear.getTime()) / 86400000);
+      const weekNumber = Math.ceil((days + startYear.getDay() + 1) / 7);
+      const randomVerify = ((attendanceData.id + weekNumber) % 100) < 5;
+
+      await supabase.from('logbooks').insert([{
+        user_id: userId,
+        attendance_id: attendanceData.id,
+        shift,
+        log_date: attendanceDate,
+        description: '',
+        activity_name: randomVerify ? 'random' : 'system',
+        status: 'IN_PROGRESS',
+      }]);
+
+      toast.success(`Absen masuk piket ${shift} berhasil.`);
+      setCanCheckIn(false);
+      router.replace('/dashboard');
+    } catch (err: any) {
+      toast.error(err?.message || 'Gagal menyimpan absen.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
-      <header className="bg-blue-900 text-white p-6 pb-20 shadow-xl rounded-b-2xl">
-        <div className="flex justify-between items-start">
-          <div className="flex items-center space-x-3">
-            <div className="p-2 rounded-full bg-white"><User size={24} className="text-blue-900" /></div>
-            <div><h1 className="text-xl font-extrabold">{userData.fullName}</h1><p className="text-sm opacity-80">{userData.email}</p></div>
-          </div>
-          <button onClick={handleLogout} className="text-white hover:text-red-300 transition duration-200 p-2 rounded-full" aria-label="Logout"><LogOut size={24} /></button>
-        </div>
+      <header className="bg-blue-900 text-white p-4 shadow-lg flex items-center">
+        <button onClick={() => router.back()} className="p-1 mr-4 text-white hover:text-gray-300 transition">
+          <ArrowLeft size={24} />
+        </button>
+        <div><h1 className="text-xl font-bold">Absen Masuk</h1><p className="text-xs text-blue-100">KPPN Tebing Tinggi</p></div>
       </header>
 
-      <main className="px-5 -mt-10 pb-10">
-        {/* Status Absensi */}
-        <div className="bg-white p-5 rounded-xl shadow-2xl mb-6 border-b-4 border-blue-500">
-          <h2 className="text-sm font-medium text-gray-500 mb-3 uppercase tracking-wider">
-            Status Aktivitas {currentShift ? `(Shift ${currentShift.toUpperCase()})` : ''}
-          </h2>
-          <div className="flex items-center justify-between"><StatusBadge status={absensiStatus} /></div>
+      <main className="p-6">
+        <div className="bg-white p-8 rounded-xl shadow-lg mb-8 text-center">
+          <Clock size={48} className="text-gray-700 mx-auto mb-4" />
+          <p className="text-lg font-semibold text-gray-700">Waktu Saat Ini (WIB)</p>
+          <h2 className="text-5xl font-extrabold text-gray-900 mb-1">{formattedTime}</h2>
+          <p className="text-md text-gray-500">{formattedDate}</p>
         </div>
 
-        {/* Tombol Absen */}
-        <div className="grid grid-cols-2 gap-4 mb-8">
-          <button 
-            onClick={handleAbsenMasuk} 
-            className={`flex items-center justify-center space-x-2 py-3 rounded-xl shadow-lg transition duration-300 ${isMasukDisabled ? 'bg-gray-400 cursor-not-allowed shadow-none' : 'bg-blue-800 text-white hover:bg-blue-700'}`}
-            disabled={isMasukDisabled}
+        <div className="bg-white p-4 rounded-xl shadow-md border mb-4">
+          <label className="font-semibold text-gray-700">Pilih Shift:</label>
+          <select
+            value={shift}
+            onChange={(e) => setShift(e.target.value as 'pagi' | 'malam')}
+            className="mt-2 w-full border p-2 rounded-lg"
           >
-            <ArrowRight size={20} /><span className="font-bold">Absen Masuk</span>
-          </button>
-
-          <button 
-            onClick={handleAbsenPulang} 
-            className={`flex items-center justify-center space-x-2 py-3 rounded-xl shadow-lg transition duration-300 ${isPulangDisabled ? 'bg-gray-400 text-gray-200 shadow-none cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'}`}
-            disabled={isPulangDisabled}
-          >
-            <ArrowLeft size={20} /><span className="font-bold">Absen Pulang</span>
-          </button>
+            <option value="pagi">Piket Pagi — masuk maks. 07.15 WIB</option>
+            <option value="malam">Piket Malam — masuk maks. 17.30 WIB</option>
+          </select>
         </div>
 
-        {/* Alert Logbook */}
-        {(absensiStatus === 'Masuk' || absensiStatus === 'Terlambat') && (
-          <div className={`p-4 mb-8 rounded-xl shadow-sm border ${hasCompletedLogbook ? 'bg-green-50 border-green-300 text-green-800' : 'bg-yellow-50 border-yellow-300 text-yellow-800'}`}>
-            <p className="font-semibold text-center flex items-center justify-center text-sm">
-              <AlertTriangle size={20} className={`mr-2 ${hasCompletedLogbook ? 'text-green-600' : ''}`} />
-              {hasCompletedLogbook 
-                ? 'Logbook sudah diisi. Silakan Absen Pulang.' 
-                : 'Isi Logbook dulu agar tombol Pulang aktif.'}
+        <div className="bg-white p-4 rounded-xl shadow-md border mb-5">
+          <p className="font-semibold text-gray-700 mb-1">Lokasi Presensi: KPPN Tebing Tinggi, Jl. Sutomo No. 2 (maks. {OFFICE_LOCATION.radius_m} meter)</p>
+          <p className={`text-sm ${distance && distance <= OFFICE_LOCATION.radius_m ? 'text-green-600' : 'text-red-600'}`}>
+            {locationStatus}
+          </p>
+          {distance !== null && (
+            <p className="mt-1 text-sm text-gray-600">
+              Jarak dari kantor: <b>{distance.toFixed(1)} meter</b>
             </p>
-          </div>
-        )}
-
-        {/* Menu */}
-        <h2 className="text-lg font-bold text-gray-800 mb-4">Menu Aplikasi</h2>
-        <div className="space-y-4">
-          <FeatureCard icon={FileText} title="Logbook" description="Catat detail aktivitas harian Anda." href="/logbook" />
-          <FeatureCard icon={FileText} title="Absen Lembur" description="Catat detail aktivitas harian Anda." href="/lembur" />
-          <FeatureCard icon={Briefcase} title="Pengajuan Cuti" description="Ajukan permohonan cuti." href="/pengajuancutipage" />
-          <FeatureCard icon={AlertTriangle} title="Pengajuan Izin" description="Ajukan izin tidak hadir atau keperluan mendadak." href="/pengajuanizin" />
-          <FeatureCard icon={BarChart2} title="Rekap Absensi" description="Lihat riwayat kehadiran bulanan." href="/rekapabsensi" />
-          <FeatureCard icon={BarChart2} title="Rekap Lembur" description="Lihat riwayat lembur." href="/rekaplembur" />
-          <FeatureCard icon={BarChart2} title="Perilaku Kerja" description="Masih tahap pengembangan" href="/penilaianperilaku" />
-          <FeatureCard icon={BarChart3}
-                  title="Rapor Kinerja"
-                  description="Masih tahap pengembangan" 
-                  href="#"
-                  onClick={handleOpenModal}
-                />
+          )}
+          <p className="mt-2 text-sm text-gray-600">
+            <b>Alamat:</b><br />{address}
+          </p>
+          <button onClick={fetchLocation} className="mt-3 bg-blue-900 text-white text-sm py-2 px-3 rounded-lg">
+            Ambil Ulang Lokasi
+          </button>
         </div>
-        {open && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center">
-          <div className="bg-white p-6 rounded-lg w-80">
-            
-            <h2 className="text-lg font-bold mb-4">
-              Pilih Periode
-            </h2>
 
-            {/* Tahun */}
-            <select
-              value={year}
-              onChange={(e) => setYear(Number(e.target.value))}
-              className="w-full border p-2 mb-3"
-            >
-              {[2024, 2025, 2026].map((y) => (
-                <option key={y} value={y}>{y}</option>
-              ))}
-            </select>
-
-            {/* Bulan */}
-            <select
-              value={month}
-              onChange={(e) => setMonth(Number(e.target.value))}
-              className="w-full border p-2 mb-4"
-            >
-              {Array.from({ length: 12 }).map((_, i) => (
-                <option key={i + 1} value={i + 1}>
-                  {i + 1}
-                </option>
-              ))}
-            </select>
-
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setOpen(false)}
-                className="px-3 py-1 border"
-              >
-                Batal
-              </button>
-
-              <button
-                onClick={handleSubmit}
-                className="px-3 py-1 bg-blue-600 text-white"
-              >
-                Lihat
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
+        <button
+          onClick={handleCheckIn}
+          disabled={isSubmitting || !canCheckIn}
+          className={`w-full py-4 text-white font-extrabold rounded-xl transition duration-300 shadow-xl ${
+            isSubmitting || !canCheckIn ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-900 hover:bg-blue-800'
+          }`}
+        >
+          {isSubmitting ? 'Memproses...' : !canCheckIn ? `Sudah absen piket ${shift}` : 'SUBMIT ABSEN MASUK'}
+        </button>
       </main>
-       
     </div>
   );
 }
